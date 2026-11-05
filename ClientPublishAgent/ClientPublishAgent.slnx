@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="ClientPublishAgent.Desktop/ClientPublishAgent.Desktop.csproj" />
+  <Project Path="ClientPublishAgent.HarnessChecks/ClientPublishAgent.HarnessChecks.csproj" />
+  <Project Path="ClientPublishAgent/ClientPublishAgent.csproj" />
+</Solution>

@@ -1,0 +1,20 @@
+﻿<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:ClientPublishAgent.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:views="using:ClientPublishAgent.Views"
+        mc:Ignorable="d" d:DesignWidth="1000" d:DesignHeight="720"
+        x:Class="ClientPublishAgent.Views.MainWindow"
+        Width="1000" Height="720" MinWidth="800" MinHeight="600"
+        Icon="/Assets/avalonia-logo.ico"
+        Title="个人工作平台">
+        <TabControl>
+            <TabItem Header="Agent 工作区">
+                <views:AgentView x:Name="AgentWorkspace" />
+            </TabItem>
+            <TabItem Header="手工跨平台任务">
+                <views:MainView />
+            </TabItem>
+        </TabControl>
+</Window>

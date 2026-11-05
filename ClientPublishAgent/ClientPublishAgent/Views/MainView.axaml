@@ -1,0 +1,46 @@
+﻿<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:ClientPublishAgent.ViewModels"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+             x:Class="ClientPublishAgent.Views.MainView"
+             x:DataType="vm:MainViewModel">
+    <Design.DataContext>
+        <vm:MainViewModel />
+    </Design.DataContext>
+
+    <Grid RowDefinitions="Auto,*,Auto" Margin="24" RowSpacing="16">
+        <StackPanel Spacing="4">
+            <TextBlock Text="个人工作平台" FontSize="26" FontWeight="Bold" />
+            <TextBlock Text="跨平台任务插件 · 原生主机限制 / Windows WSL Debian · MarketServer" />
+        </StackPanel>
+
+        <Grid Grid.Row="1" ColumnDefinitions="360,*" ColumnSpacing="24">
+            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto">
+                <StackPanel Spacing="8" IsEnabled="{Binding !IsRunning}">
+                    <TextBlock Text="任务" FontWeight="SemiBold" />
+                    <ComboBox ItemsSource="{Binding Tasks}" SelectedItem="{Binding SelectedTask}" HorizontalAlignment="Stretch" />
+                    <TextBlock Text="脚本目录（旧任务 win-package，插件 Scripts 根目录；MarketServer 仓库根目录）" FontWeight="SemiBold" TextWrapping="Wrap" />
+                    <TextBox Text="{Binding ScriptsDirectory}" />
+                    <TextBlock Text="当前版本" FontWeight="SemiBold" />
+                    <TextBox Text="{Binding CurrentVersion}" PlaceholderText="例如 1.0.0" />
+                    <TextBlock Text="目标版本" FontWeight="SemiBold" />
+                    <TextBox Text="{Binding NextVersion}" PlaceholderText="例如 1.1.0" />
+                    <TextBlock Text="升级地址（可选）" FontWeight="SemiBold" />
+                    <TextBox Text="{Binding OssHost}" PlaceholderText="留空使用脚本默认值" />
+                    <TextBlock TextWrapping="Wrap" Text="发布目录取自脚本目录下的 publish-config.json。脚本会删除暂存目录、更新旧版本基线和差分输出；运行前请检查配置并备份。" />
+                    <TextBlock TextWrapping="Wrap" Text="Windows 需要 NSIS；Linux 需要 pwsh / dpkg，Windows Linux wrapper 需要 WSL Debian + pwsh；macOS 需要原生 pwsh / hdiutil。MarketServer Linux AOT 仅原生 Linux。非沙箱，请只运行可信脚本。" />
+                    <CheckBox IsChecked="{Binding IsConfirmed}" Content="已检查发布目录并备份" />
+                    <Button Content="执行任务" Command="{Binding RunCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                </StackPanel>
+            </ScrollViewer>
+            <Grid Grid.Column="1" RowDefinitions="Auto,*,Auto" RowSpacing="8">
+                <TextBlock Text="执行日志（仅保留最近内容）" FontWeight="SemiBold" />
+                <TextBox Grid.Row="1" Text="{Binding Log, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                <Button Grid.Row="2" Content="取消任务" Command="{Binding CancelCommand}" IsEnabled="{Binding IsRunning}" />
+            </Grid>
+        </Grid>
+        <TextBlock Grid.Row="2" Text="{Binding Status}" TextWrapping="Wrap" />
+    </Grid>
+</UserControl>

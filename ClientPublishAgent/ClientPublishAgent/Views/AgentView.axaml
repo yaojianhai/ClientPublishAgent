@@ -1,0 +1,236 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ClientPublishAgent.ViewModels"
+             xmlns:h="using:ClientPublishAgent.Services.Harness"
+             xmlns:r="using:ClientPublishAgent.Resources"
+             x:Class="ClientPublishAgent.Views.AgentView"
+             x:DataType="vm:AgentWorkspaceViewModel">
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="ChatUserBrush" Color="#F2F4F7" />
+                    <SolidColorBrush x:Key="ChatBorderBrush" Color="#D5DAE1" />
+                    <SolidColorBrush x:Key="ChatToolBrush" Color="#F8F9FB" />
+                    <SolidColorBrush x:Key="ChatMutedBrush" Color="#596579" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="ChatUserBrush" Color="#262C36" />
+                    <SolidColorBrush x:Key="ChatBorderBrush" Color="#414A59" />
+                    <SolidColorBrush x:Key="ChatToolBrush" Color="#20252D" />
+                    <SolidColorBrush x:Key="ChatMutedBrush" Color="#A5B0C0" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+        </ResourceDictionary>
+    </UserControl.Resources>
+    <UserControl.Styles>
+        <Style Selector="Border.message">
+            <Setter Property="Padding" Value="12" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Margin" Value="0,0,0,12" />
+        </Style>
+        <Style Selector="Border.message.user">
+            <Setter Property="Background" Value="{DynamicResource ChatUserBrush}" />
+        </Style>
+        <Style Selector="Border.tool">
+            <Setter Property="BorderBrush" Value="{DynamicResource ChatBorderBrush}" />
+            <Setter Property="Background" Value="{DynamicResource ChatToolBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="12" />
+            <Setter Property="Margin" Value="12,0,12,12" />
+        </Style>
+        <Style Selector="Border.tool.resolved">
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Padding" Value="0,6" />
+        </Style>
+        <Style Selector="TextBlock.muted">
+            <Setter Property="Foreground" Value="{DynamicResource ChatMutedBrush}" />
+        </Style>
+    </UserControl.Styles>
+    <Grid RowDefinitions="Auto,*,Auto" Margin="16" RowSpacing="10">
+        <StackPanel Spacing="3">
+            <TextBlock Text="Agent 工作区" FontSize="22" FontWeight="Bold" />
+            <TextBlock Text="Microsoft Agent Framework Harness · 会话、规划、工具与人工审批" />
+        </StackPanel>
+        <Grid Grid.Row="1" ColumnDefinitions="320,*" ColumnSpacing="16">
+            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto">
+                <StackPanel Spacing="7">
+                    <TabControl>
+                    <TabItem Header="Agent 配置">
+                    <StackPanel Spacing="6" IsEnabled="{Binding CanEditSettings}">
+                        <ComboBox ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}" HorizontalAlignment="Stretch" />
+                        <TextBox Text="{Binding ProfileName}" PlaceholderText="Agent 名称" />
+                        <TextBox Text="{Binding Instructions}" PlaceholderText="Agent instructions" AcceptsReturn="True" MinHeight="80" />
+                        <TextBlock Text="OpenAI 兼容 API 地址" />
+                        <TextBox Text="{Binding Endpoint}" PlaceholderText="https://.../v1" />
+                        <TextBlock Text="模型名称" />
+                        <TextBox Text="{Binding Model}" PlaceholderText="模型或部署名称" />
+                        <TextBlock Text="密钥环境变量名" />
+                        <TextBox Text="{Binding KeyEnvironmentVariable}" PlaceholderText="例如 DEEPSEEK_API_KEY（填写变量名）" />
+                        <TextBlock Text="工作区绝对路径" />
+                        <TextBox Text="{Binding WorkspaceRoot}" />
+                        <TextBlock Text="预设脚本根目录（含 win/linux/mac-package）" TextWrapping="Wrap" />
+                        <TextBox Text="{Binding ScriptsDirectory}" />
+                        <TextBlock Text="MarketServer 仓库根目录（仅原生 Linux AOT）" TextWrapping="Wrap" />
+                        <TextBox Text="{Binding MarketServerRoot}" />
+                        <StackPanel Orientation="Horizontal" Spacing="5">
+                            <Button Content="保存" Command="{Binding SaveProfileCommand}" />
+                            <Button Content="新增" Command="{Binding NewProfileCommand}" />
+                            <Button Content="删除 Agent" Command="{Binding DeleteProfileCommand}" />
+                        </StackPanel>
+                    </StackPanel>
+                    </TabItem>
+                    <TabItem Header="历史">
+                    <StackPanel Spacing="6">
+                        <TextBox Text="{Binding Search}" PlaceholderText="搜索名称 / 对话内容" />
+                        <TextBlock Text="{Binding HistoryWarning}" TextWrapping="Wrap" />
+                        <ListBox ItemsSource="{Binding Sessions}" SelectedItem="{Binding SelectedSession}" Height="180" IsEnabled="{Binding !IsBusy}" />
+                        <TextBox Text="{Binding SessionName}" PlaceholderText="会话名称" />
+                        <Button Content="选取并恢复上下文" Command="{Binding RestoreSessionCommand}" IsEnabled="{Binding CanConnect}" />
+                        <Button Content="恢复此历史绑定的原 Agent 配置" Command="{Binding RestoreBoundProfileCommand}" IsEnabled="{Binding CanEditSettings}" />
+                        <TextBlock Text="恢复绑定配置会替换该 Agent 当前配置；其他历史需分别从各自快照恢复原配置，不会删除历史。" TextWrapping="Wrap" />
+                        <StackPanel Orientation="Horizontal" Spacing="5">
+                            <Button Content="重命名" Command="{Binding RenameSessionCommand}" IsEnabled="{Binding !IsBusy}" />
+                            <Button Content="永久删除" Command="{Binding DeleteSessionCommand}" IsEnabled="{Binding !IsBusy}" />
+                            <Button Content="刷新" Command="{Binding RefreshSessionsCommand}" />
+                        </StackPanel>
+                        <TextBlock Text="当前 Agent 的历史；更改模型、指令或能力后必须恢复原配置才能恢复旧会话。审批不会自动恢复授权。" TextWrapping="Wrap" />
+                    </StackPanel>
+                    </TabItem>
+                    <TabItem Header="能力">
+                    <StackPanel Spacing="6">
+                        <StackPanel IsEnabled="{Binding CanEditSettings}">
+                            <CheckBox IsChecked="{Binding EnableFiles}" Content="工作区文件读写 / 文件传输（需授权）" />
+                            <CheckBox IsChecked="{Binding EnableTerminal}" Content="终端（非沙箱，需授权）" />
+                            <CheckBox IsChecked="{Binding EnablePackaging}" Content="跨平台任务插件" />
+                            <CheckBox IsChecked="{Binding EnableMemory}" Content="显式文件 memory（需授权，无自动加载）" />
+                            <CheckBox IsChecked="{Binding EnableAutoMemory}" Content="自动 memory：每轮目录文本送到模型" />
+                            <TextBox Text="{Binding MemoryDirectory}" PlaceholderText="工作区相对 memory 目录" />
+                            <CheckBox IsChecked="{Binding EnableSkills}" Content="显式技能/资源读取（需授权，无自动发现）" />
+                            <CheckBox IsChecked="{Binding EnableAutoSkills}" Content="自动发现 skills：元数据送到模型" />
+                            <TextBox Text="{Binding SkillsDirectory}" PlaceholderText="工作区相对 skills 目录" />
+                            <TextBlock Text="自动能力独立授权：指定相对目录内容/技能元数据会自动上传到此模型。仅工作区内、不扫描全盘；内容不可信，凭据识别非完整DLP。写记忆仍须启用手动能力并授权；技能加载/资源需授权，不执行脚本。" TextWrapping="Wrap" />
+                            <CheckBox IsChecked="{Binding EnableWebSearch}" Content="联网搜索（query 披露需授权）" />
+                            <TextBox Text="{Binding SearchEndpoint}" PlaceholderText="用户 SearXNG JSON endpoint：https://.../search" />
+                            <TextBlock Text="自行配置支持 format=json 的 SearXNG 服务；HTTPS 或 localhost 回环HTTP。查询发送到该服务，可能是第三方；切勿授权私密查询。无需搜索密钥，不会发送模型密钥，不访问结果页面。" TextWrapping="Wrap" />
+                            <CheckBox IsChecked="{Binding EnableBackground}" Content="具名背景 Researcher（无外部工具）" />
+                            <CheckBox IsChecked="{Binding EnableTelemetry}" Content="OTel instrumentation（无 exporter）" />
+                            <CheckBox IsChecked="{Binding EnableCompaction}" Content="Harness 自动上下文 compaction" />
+                            <TextBlock Text="模型上下文 token 上限 / 输出 token 上限" />
+                            <TextBox Text="{Binding ContextTokens}" />
+                            <TextBox Text="{Binding OutputTokens}" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding CapabilityCatalog}" TextWrapping="Wrap" />
+                    </StackPanel>
+                    </TabItem>
+                    </TabControl>
+                    <TextBlock TextWrapping="Wrap" Text="仅允许 HTTPS 或本机回环 HTTP。密钥从环境变量读取，不保存在应用中。发送消息后，对话会发送到配置的服务，请勿输入敏感信息。" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="新建会话" Command="{Binding ConnectCommand}" IsEnabled="{Binding CanConnect}" />
+                        <Button Content="保存并断开" Command="{Binding DisconnectCommand}" IsEnabled="{Binding CanDisconnect}" />
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+            <Grid Grid.Column="1" RowDefinitions="Auto,*,Auto" RowSpacing="10">
+                <WrapPanel>
+                    <TextBlock Text="{Binding ProfileName}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,12,0" />
+                    <TextBlock Text="{Binding ModeText}" Classes="muted" VerticalAlignment="Center" Margin="0,0,12,0" />
+                    <Button Content="Plan" Command="{Binding PlanModeCommand}" IsEnabled="{Binding CanSend}" Margin="0,0,6,0" />
+                    <Button Content="Execute" Command="{Binding ExecuteModeCommand}" IsEnabled="{Binding CanSend}" />
+                </WrapPanel>
+                <TabControl Grid.Row="1">
+                    <TabItem Header="{x:Static r:ChatText.Chat}">
+                        <Grid>
+                            <ScrollViewer x:Name="ChatScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" ScrollChanged="ChatScrollChanged">
+                                <StackPanel Margin="4,12,4,16">
+                                    <ItemsControl ItemsSource="{Binding ChatItems}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:ChatEntryViewModel">
+                                                <StackPanel>
+                                                    <Border Classes="message" Classes.user="{Binding IsUser}" IsVisible="{Binding !IsApproval}">
+                                                        <StackPanel Spacing="8">
+                                                            <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="12" Classes="muted" />
+                                                            <SelectableTextBlock Text="{Binding Text}" TextWrapping="Wrap" FontSize="14" />
+                                                        </StackPanel>
+                                                    </Border>
+                                                    <Border Classes="tool" Classes.resolved="{Binding !IsPendingApproval}" IsVisible="{Binding IsApproval}">
+                                                        <StackPanel Spacing="8">
+                                                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                                                <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                                                <TextBlock Grid.Column="1" Text="{Binding DecisionText}" Classes="muted" FontSize="12" />
+                                                            </Grid>
+                                                            <StackPanel IsVisible="{Binding IsPendingApproval}" Spacing="8">
+                                                                <TextBlock Text="{x:Static r:ChatText.ToolRequest}" Classes="muted" />
+                                                                <Expander Header="{x:Static r:ChatText.ToolDetails}" HorizontalAlignment="Stretch">
+                                                                    <SelectableTextBlock Text="{Binding Text}" TextWrapping="Wrap" FontFamily="Cascadia Code,Consolas,monospace" FontSize="12" Margin="0,8" />
+                                                                </Expander>
+                                                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                                                    <StackPanel Orientation="Horizontal">
+                                                                        <Button Content="{x:Static r:ChatText.AllowOnce}" Command="{Binding AllowOnceCommand}" CommandParameter="{Binding}" />
+                                                                        <Button Content="⌄" ToolTip.Tip="{x:Static r:ChatText.AllowSession}" Padding="8,5">
+                                                                            <Button.Flyout>
+                                                                                <MenuFlyout Placement="Top">
+                                                                                    <MenuItem IsEnabled="False">
+                                                                                        <MenuItem.Header><TextBlock Text="{x:Static r:ChatText.SessionWarning}" MaxWidth="320" TextWrapping="Wrap" /></MenuItem.Header>
+                                                                                    </MenuItem>
+                                                                                    <MenuItem Header="{x:Static r:ChatText.AllowSession}" Command="{Binding AllowSessionCommand}" CommandParameter="{Binding}" />
+                                                                                </MenuFlyout>
+                                                                            </Button.Flyout>
+                                                                        </Button>
+                                                                    </StackPanel>
+                                                                    <Button Content="{x:Static r:ChatText.Reject}" Command="{Binding DenyToolCommand}" CommandParameter="{Binding}" />
+                                                                </StackPanel>
+                                                            </StackPanel>
+                                                        </StackPanel>
+                                                    </Border>
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <StackPanel IsVisible="{Binding IsBusy}" Orientation="Horizontal" Spacing="10" Margin="12,8">
+                                        <ProgressBar IsIndeterminate="True" Width="28" Height="4" VerticalAlignment="Center" />
+                                        <TextBlock Text="{x:Static r:ChatText.Thinking}" Classes="muted" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </ScrollViewer>
+                            <StackPanel IsVisible="{Binding IsChatEmpty}" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12" Margin="24">
+                                <TextBlock Text="{x:Static r:ChatText.EmptyTitle}" FontSize="22" FontWeight="SemiBold" TextAlignment="Center" />
+                                <TextBlock Text="{x:Static r:ChatText.EmptyHint}" Classes="muted" TextWrapping="Wrap" TextAlignment="Center" />
+                            </StackPanel>
+                            <Button x:Name="JumpToLatest" Content="{x:Static r:ChatText.Latest}" IsVisible="False" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,12" Click="JumpToLatestClicked" />
+                        </Grid>
+                    </TabItem>
+                    <TabItem Header="Todo"><TextBox Text="{Binding TodoText, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" /></TabItem>
+                    <TabItem Header="Harness 状态"><TextBox Text="{Binding HarnessInfo, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" ScrollViewer.VerticalScrollBarVisibility="Auto" /></TabItem>
+                    <TabItem Header="{x:Static r:ChatText.Logs}">
+                        <Grid RowDefinitions="Auto,*" RowSpacing="8">
+                            <TextBlock Text="{x:Static r:ChatText.LogHint}" Classes="muted" TextWrapping="Wrap" />
+                            <TextBox Grid.Row="1" Text="{Binding TaskLog, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                        </Grid>
+                    </TabItem>
+                </TabControl>
+                <Border Grid.Row="2" BorderThickness="1" BorderBrush="{DynamicResource ChatBorderBrush}" CornerRadius="10" Padding="10">
+                    <Grid RowDefinitions="*,Auto" RowSpacing="8">
+                        <TextBox x:Name="ChatInput" Text="{Binding Input}" PlaceholderText="{x:Static r:ChatText.InputHint}" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="56" MaxHeight="160" BorderThickness="0" Background="Transparent" IsEnabled="{Binding IsConnected}" KeyDown="ChatInputKeyDown" />
+                        <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                            <StackPanel Spacing="4">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Text="{Binding ApprovalModeText}" Classes="muted" FontSize="12" VerticalAlignment="Center" />
+                                    <Button Content="{x:Static r:ChatText.Revoke}" IsVisible="{Binding SessionApprovalEnabled}" Command="{Binding RevokeSessionApprovalCommand}" IsEnabled="{Binding CanRevokeSessionApproval}" Padding="5,2" />
+                                </StackPanel>
+                                <TextBlock Text="{x:Static r:ChatText.InputKeys}" Classes="muted" FontSize="11" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Bottom" Spacing="6">
+                                <Button Content="{x:Static r:ChatText.Stop}" Command="{Binding CancelCommand}" IsVisible="{Binding CanCancel}" />
+                                <Button Content="{x:Static r:ChatText.Send}" Command="{Binding SendCommand}" IsEnabled="{Binding CanSend}" IsVisible="{Binding !IsBusy}" />
+                            </StackPanel>
+                        </Grid>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Grid>
+        <TextBlock Grid.Row="2" Text="{Binding Status}" TextWrapping="Wrap" />
+    </Grid>
+</UserControl>
