@@ -6,6 +6,8 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using ClientPublishAgent.Services;
+using ClientPublishAgent.Resources;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
@@ -38,9 +40,16 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty] public partial bool IsRunning { get; set; }
     [ObservableProperty] public partial string Status { get; set; } = "准备就绪";
     [ObservableProperty] public partial string Log { get; set; } = "";
+    [ObservableProperty] public partial string ScriptInput { get; set; } = "";
+    [ObservableProperty] public partial bool IsScriptInputAvailable { get; set; }
 
     public MainViewModel()
     {
+        _runner.InputAvailabilityChanged += available => Dispatcher.UIThread.Invoke(() =>
+        {
+            IsScriptInputAvailable = available;
+            if (!available) ScriptInput = "";
+        });
         var plugin = OperatingSystem.IsMacOS() ? "macos-package" : "linux-package";
         var architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture ==
             System.Runtime.InteropServices.Architecture.Arm64 ? "arm64" : "x64";
@@ -78,7 +87,7 @@ public partial class MainViewModel : ViewModelBase
                 AppendLog("输出根目录：" + command.OutputRoot);
                 Status = "运行跨平台插件；可取消";
                 var code = await _runner.RunProcessAsync(command.Executable, command.Arguments, command.Directory,
-                    new Progress<string>(AppendLog), _cancellation.Token);
+                    new Progress<string>(AppendOutput), _cancellation.Token, interactive: true);
                 _cancellation.Token.ThrowIfCancellationRequested();
                 Status = $"插件退出代码：{code}，请检查日志/产物。";
                 return;
@@ -104,7 +113,7 @@ public partial class MainViewModel : ViewModelBase
             AppendLog("首次发布或 OldRelease 为空时，脚本会跳过差分包生成；请检查脚本输出。");
             IsConfirmed = false;
             Status = "正在运行";
-            var progress = new Progress<string>(AppendLog);
+            var progress = new Progress<string>(AppendOutput);
             int exitCode = await _runner.RunAsync(script, CurrentVersion.Trim(), NextVersion.Trim(),
                 OssHost?.Trim() ?? "", progress, _cancellation.Token);
             _cancellation.Token.ThrowIfCancellationRequested();
@@ -132,6 +141,19 @@ public partial class MainViewModel : ViewModelBase
 
     [RelayCommand]
     private void Cancel() => _cancellation?.Cancel();
+
+    [RelayCommand]
+    private async Task SendScriptInputAsync()
+    {
+        if (!IsScriptInputAvailable) return;
+        var input = ScriptInput;
+        ScriptInput = "";
+        try { await _runner.SendInputAsync(input); }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException)
+        {
+            Status = string.Format(ChatText.ScriptInputError, ex.Message);
+        }
+    }
     public async Task CloseAsync()
     {
         _cancellation?.Cancel();
@@ -149,8 +171,13 @@ public partial class MainViewModel : ViewModelBase
 
     private void AppendLog(string line)
     {
+        AppendOutput(line + Environment.NewLine);
+    }
+
+    private void AppendOutput(string text)
+    {
         const int maxLength = 100_000;
-        var text = Log + line + Environment.NewLine;
-        Log = text.Length <= maxLength ? text : text[^maxLength..];
+        var updated = Log + text;
+        Log = updated.Length <= maxLength ? updated : updated[^maxLength..];
     }
 }

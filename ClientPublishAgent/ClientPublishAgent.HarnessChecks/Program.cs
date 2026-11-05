@@ -24,6 +24,12 @@ try
     Environment.SetEnvironmentVariable(keyName, "local-test-key");
     await using var model = new FakeModel();
     var output = new ConcurrentQueue<string>();
+    if (args.Contains("--interactive", StringComparer.Ordinal))
+    {
+        await CheckInteractiveTasksAsync(model, root, keyName, ct);
+        model.AssertHealthy();
+        return;
+    }
     if (args.Contains("--chat-ui", StringComparer.Ordinal))
     {
         await CheckChatInteractionAsync(model, root, keyName, ct);
@@ -58,6 +64,7 @@ try
     {
         await CheckHarnessAsync(workspace, model, output, root, ct);
         await CheckGateAsync(root, ct);
+        await CheckInteractiveTasksAsync(model, root, keyName, ct);
     }
     await CheckPlatformAsync(model, output, root, keyName, ct);
     await CheckAutomaticAsync(model, output, root, keyName, ct);
@@ -71,6 +78,115 @@ finally
     Directory.Delete(root, true);
 }
 
+    static async Task CheckInteractiveTasksAsync(FakeModel model, string root, string keyName, CancellationToken ct)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(TimeSpan.FromSeconds(30));
+        var token = deadline.Token;
+        var runner = new PowerShellTaskRunner();
+        var events = new ConcurrentQueue<bool>();
+        var output = new CollectingProgress();
+        runner.InputAvailabilityChanged += events.Enqueue;
+        var script = Path.Combine(root, "interactive-check.ps1");
+        await File.WriteAllTextAsync(script, "param($CurrentVersion,$NextVersion,$OssHost)\nWrite-Output 'started-interactive-test'\n$v = Read-Host ([string]::Concat([char]0x8BF7,[char]0x8F93,[char]0x5165))\nWrite-Host ('value=' + $v)\nWrite-Host 'before-pause'\ncmd.exe /c pause\nWrite-Host 'interactive-finished'", token);
+        using var runCancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var run = runner.RunAsync(script, "1.0.0", "1.0.1", "", output, runCancellation.Token);
+        try
+        {
+            await WaitForOutputAsync(output, "\u8bf7\u8f93\u5165", token);
+            Check(events.TryPeek(out var available) && available, "interactive task exposes local input");
+            await runner.SendInputAsync("\u786e\u8ba4", token);
+            await WaitForOutputAsync(output, "before-pause", token);
+            await runner.SendInputAsync("", token);
+            Check(await run == 0 && output.Text.Contains("value=\u786e\u8ba4") && output.Text.Contains("interactive-finished"), "Read-Host and cmd pause accept input");
+        }
+        catch
+        {
+            Console.WriteLine("Interactive test output: " + output.Text + "; events: " + string.Join(",", events) + "; state: " + run.Status);
+            throw;
+        }
+        finally
+        {
+            if (!run.IsCompleted) runCancellation.Cancel();
+            try { await run; } catch (OperationCanceledException) { }
+        }
+        Check(events.Last() == false, "interactive input unavailable after process exit");
+        try { await runner.SendInputAsync("stale", token); throw new Exception("FAIL: input accepted after exit"); }
+        catch (InvalidOperationException) { }
+
+        var argumentScript = Path.Combine(root, "interactive-arguments.ps1");
+        var argumentOutput = new CollectingProgress();
+        await File.WriteAllTextAsync(argumentScript, "param($CurrentVersion,$NextVersion,$OssHost)\nWrite-Output ('HOST:' + $OssHost)\nexit 7", token);
+        var argument = "value'; Write-Output 'unexpected-command";
+        var exitCode = await runner.RunAsync(argumentScript, "1.0.0", "1.0.1", argument, argumentOutput, token);
+        Check(exitCode == 7 && argumentOutput.Text.Contains("HOST:" + argument), "interactive wrapper preserves exit code and literal arguments");
+
+        var secureOutput = new CollectingProgress();
+        var secureCode = await runner.RunProcessAsync(PowerShellTaskRunner.ResolvePowerShell(), ["-NoProfile", "-Command", "Read-Host 'password' -AsSecureString"],
+            root, secureOutput, token, interactive: true);
+        Check(secureCode != 0 && !secureOutput.Text.Contains("#< CLIXML") && !secureOutput.Text.Contains("<Objs Version="), "unsupported masked input fails explicitly without raw CLIXML");
+
+        var streamOutput = new CollectingProgress();
+        var streamCode = await runner.RunProcessAsync(PowerShellTaskRunner.ResolvePowerShell(), ["-NoProfile", "-Command",
+            "Write-Progress -Activity '中文打包进度' -Status '处理中'; Write-Information '中文信息流' -InformationAction Continue; Write-Warning '中文警告'"],
+            root, streamOutput, token, interactive: true);
+        Check(streamCode == 0 && streamOutput.Text.Contains("中文信息流") && streamOutput.Text.Contains("中文警告") &&
+            streamOutput.Text.Contains("中文打包进度") && streamOutput.Text.Contains("处理中") &&
+            !streamOutput.Text.Contains("#< CLIXML") && !streamOutput.Text.Contains("<Objs Version="), "PowerShell streams render readable text instead of CLIXML or mojibake");
+
+        var cancelledOutput = new CollectingProgress();
+        using (var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token))
+        {
+            var waiting = runner.RunProcessAsync(PowerShellTaskRunner.ResolvePowerShell(), ["-NoProfile", "-Command", "$v = Read-Host 'Waiting for input'"],
+                root, cancelledOutput, cancellation.Token, interactive: true);
+            await WaitForOutputAsync(cancelledOutput, "Waiting for input", token);
+            cancellation.Cancel();
+            await ExpectCancellationAsync(waiting, "cancel interactive prompt");
+            try { await runner.SendInputAsync("stale", token); throw new Exception("FAIL: cancelled input accepted"); }
+            catch (InvalidOperationException) { }
+        }
+
+        var profile = new AgentProfile { Name = "Interactive", Endpoint = model.Endpoint, Model = "fake-model", KeyEnvironmentVariable = keyName,
+            WorkspaceRoot = root, ScriptsDirectory = root, Terminal = true, Packaging = true };
+        using var workspace = new HarnessWorkspace(new HarnessSettings(profile.Endpoint, profile.Model, keyName, "", profile), output.Report);
+        var inputAvailable = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        workspace.ScriptInputAvailabilityChanged += available => { if (available) inputAvailable.TrySetResult(); };
+        await workspace.InitializeAsync(token);
+        model.EnqueueTool("run_terminal", new { command = "$v = Read-Host 'Local prompt'; Set-Content -LiteralPath 'interactive-answer.txt' -Value $v" });
+        var approval = (await workspace.SendAsync("run interactive command", cancellationToken: token)).Approvals.Single();
+        model.EnqueueText("interactive command done");
+        var approved = workspace.DecideAsync(approval.Id, true, cancellationToken: token);
+        await inputAvailable.Task.WaitAsync(token);
+        await WaitForOutputAsync(output, "Local prompt", token);
+        await workspace.SendScriptInputAsync("local-only-answer", token);
+        await approved;
+        Check((await File.ReadAllTextAsync(Path.Combine(root, "interactive-answer.txt"), token)).Trim() == "local-only-answer", "approved terminal receives user input");
+        Check(!model.Requests.Last().Contains("local-only-answer"), "interactive input is not sent to model");
+        var pluginRoot = Path.Combine(root, "win-package");
+        Directory.CreateDirectory(pluginRoot);
+        await File.WriteAllTextAsync(Path.Combine(pluginRoot, "publish-config.json"), JsonSerializer.Serialize(new { RootDirectory = root }), token);
+        await File.WriteAllTextAsync(Path.Combine(pluginRoot, "publish-upgrade-package-win-x64.ps1"),
+            "param($CurrentVersion,$NextVersion,$OssHost)\n$v = Read-Host 'Plugin prompt'\nSet-Content -LiteralPath 'plugin-answer.txt' -Value $v", token);
+        var pluginReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        workspace.ScriptInputAvailabilityChanged += available => { if (available) pluginReady.TrySetResult(); };
+        model.EnqueueTool("run_task_plugin", new { task = "windows-package", runtimeIdentifier = "win-x64", currentVersion = "1.0.0", nextVersion = "1.0.1", ossHost = "" });
+        approval = (await workspace.SendAsync("run interactive packaging", cancellationToken: token)).Approvals.Single();
+        model.EnqueueText("packaging complete");
+        var plugin = workspace.DecideAsync(approval.Id, true, cancellationToken: token);
+        await pluginReady.Task.WaitAsync(token);
+        await WaitForOutputAsync(output, "Plugin prompt", token);
+        await workspace.SendScriptInputAsync("plugin-confirmed", token);
+        await plugin;
+        Check((await File.ReadAllTextAsync(Path.Combine(pluginRoot, "plugin-answer.txt"), token)).Trim() == "plugin-confirmed", "approved packaging plugin receives user input");
+        Check(!model.Requests.Last().Contains("plugin-confirmed"), "packaging input is not sent to model");
+        Console.WriteLine("PASS: interactive PowerShell and batch input, cancellation and model isolation");
+    }
+
+    static async Task WaitForOutputAsync(CollectingProgress output, string text, CancellationToken ct)
+    {
+        while (!output.Text.Contains(text, StringComparison.OrdinalIgnoreCase)) await Task.Delay(20, ct);
+    }
+
     static async Task CheckChatInteractionAsync(FakeModel model, string root, string keyName, CancellationToken ct)
     {
         if (!OperatingSystem.IsWindows())
@@ -78,6 +194,7 @@ finally
             Console.WriteLine("SKIP: live chat window checks require Windows.");
             return;
         }
+
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
@@ -1155,6 +1272,13 @@ static async Task ExpectCancellationAsync(Task task, string name)
 static void Check(bool condition, string name)
 {
     if (!condition) throw new InvalidOperationException("FAIL: " + name);
+}
+
+sealed class CollectingProgress : IProgress<string>
+{
+    private readonly ConcurrentQueue<string> _chunks = new();
+    public string Text => string.Concat(_chunks);
+    public void Report(string value) => _chunks.Enqueue(value);
 }
 
 sealed class SyncProgress : IProgress<string>

@@ -36,5 +36,9 @@ internal static class ChatText
 	public static string Latest => Get(nameof(Latest));
 	public static string Logs => Get(nameof(Logs));
 	public static string LogHint => Get(nameof(LogHint));
+	public static string ScriptInputHint => Get(nameof(ScriptInputHint));
+	public static string ScriptInputPlaceholder => Get(nameof(ScriptInputPlaceholder));
+	public static string ScriptInputSend => Get(nameof(ScriptInputSend));
+	public static string ScriptInputError => Get(nameof(ScriptInputError));
 	public static string Parameters => Get(nameof(Parameters));
 }

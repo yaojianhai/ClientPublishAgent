@@ -65,7 +65,7 @@ public static class TaskCatalog
             var directory = Path.Combine(Path.GetFullPath(request.ScriptsRoot), folder);
             var path = Path.Combine(directory, script);
             if (!File.Exists(path)) throw new FileNotFoundException("Plugin script missing.", path);
-            var args = new List<string> { "-NoProfile", "-NonInteractive" };
+            var args = new List<string> { "-NoProfile" };
             if (OperatingSystem.IsWindows()) args.AddRange(["-ExecutionPolicy", "Bypass"]);
             args.AddRange(["-File", path, "-CurrentVersion", request.CurrentVersion, "-NextVersion", request.NextVersion]);
             if (id != "windows-package") args.AddRange(["-RuntimeIdentifier", request.RuntimeIdentifier]);

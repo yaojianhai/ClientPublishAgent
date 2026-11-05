@@ -142,4 +142,17 @@ public partial class AgentView : UserControl
 		if (DataContext is AgentWorkspaceViewModel viewModel && viewModel.CanSend)
 			await viewModel.SendCommand.ExecuteAsync(null);
 	}
+
+	private async void ScriptInputKeyDown(object? sender, KeyEventArgs e)
+	{
+		if (e.Key != Key.Enter || e.KeyModifiers != KeyModifiers.None) return;
+		e.Handled = true;
+		if (DataContext is AgentWorkspaceViewModel viewModel && viewModel.IsScriptInputAvailable)
+			await viewModel.SendScriptInputCommand.ExecuteAsync(null);
+	}
+
+	private void ScriptLogTextChanged(object? sender, TextChangedEventArgs e)
+	{
+		if (sender is TextBox log) log.CaretIndex = log.Text?.Length ?? 0;
+	}
 }

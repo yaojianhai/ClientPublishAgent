@@ -3,6 +3,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:ClientPublishAgent.ViewModels"
+             xmlns:r="using:ClientPublishAgent.Resources"
              mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
              x:Class="ClientPublishAgent.Views.MainView"
              x:DataType="vm:MainViewModel">
@@ -35,10 +36,17 @@
                     <Button Content="执行任务" Command="{Binding RunCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                 </StackPanel>
             </ScrollViewer>
-            <Grid Grid.Column="1" RowDefinitions="Auto,*,Auto" RowSpacing="8">
+            <Grid Grid.Column="1" RowDefinitions="Auto,*,Auto,Auto" RowSpacing="8">
                 <TextBlock Text="执行日志（仅保留最近内容）" FontWeight="SemiBold" />
-                <TextBox Grid.Row="1" Text="{Binding Log, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" ScrollViewer.VerticalScrollBarVisibility="Auto" />
-                <Button Grid.Row="2" Content="取消任务" Command="{Binding CancelCommand}" IsEnabled="{Binding IsRunning}" />
+                <TextBox Grid.Row="1" Text="{Binding Log, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" ScrollViewer.VerticalScrollBarVisibility="Auto" TextChanged="ScriptLogTextChanged" />
+                <StackPanel Grid.Row="2" IsVisible="{Binding IsScriptInputAvailable}" Spacing="6">
+                    <TextBlock Text="{x:Static r:ChatText.ScriptInputHint}" TextWrapping="Wrap" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                        <TextBox Text="{Binding ScriptInput}" PlaceholderText="{x:Static r:ChatText.ScriptInputPlaceholder}" />
+                        <Button Grid.Column="1" Content="{x:Static r:ChatText.ScriptInputSend}" Command="{Binding SendScriptInputCommand}" />
+                    </Grid>
+                </StackPanel>
+                <Button Grid.Row="3" Content="取消任务" Command="{Binding CancelCommand}" IsEnabled="{Binding IsRunning}" />
             </Grid>
         </Grid>
         <TextBlock Grid.Row="2" Text="{Binding Status}" TextWrapping="Wrap" />

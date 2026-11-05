@@ -231,6 +231,8 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 	[ObservableProperty] public partial string Input { get; set; } = "";
 	[ObservableProperty] public partial string Conversation { get; set; } = "";
 	[ObservableProperty] public partial string TaskLog { get; set; } = "";
+	[ObservableProperty] public partial string ScriptInput { get; set; } = "";
+	[ObservableProperty] public partial bool IsScriptInputAvailable { get; set; }
 	[ObservableProperty] public partial string Status { get; set; } = "请配置模型服务并创建会话";
 
 	[ObservableProperty]
@@ -304,6 +306,7 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 			if (stored is not null) PlatformStore.ValidateBinding(stored, profile);
 			var settings = new HarnessSettings(profile.Endpoint, profile.Model, profile.KeyEnvironmentVariable, profile.ScriptsDirectory, profile);
 			_workspace = new HarnessWorkspace(settings, line => Dispatcher.UIThread.Invoke(() => AppendTaskLog(line)));
+			_workspace.ScriptInputAvailabilityChanged += ScriptInputAvailabilityChanged;
 			if (stored is not null) await _workspace.RestoreAsync(stored, profile);
 			else await _workspace.InitializeAsync();
 			_current = stored ?? new StoredConversation { ProfileId = profile.Id, Binding = profile.Binding, ProfileSnapshot = profile, Name = SessionName };
@@ -333,6 +336,25 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 		}
 		finally { IsBusy = false; OnPropertyChanged(nameof(CanSend)); }
 	}
+
+	[RelayCommand]
+	private async Task SendScriptInputAsync()
+	{
+		if (!IsScriptInputAvailable || _workspace is null) return;
+		var input = ScriptInput;
+		ScriptInput = "";
+		try { await _workspace.SendScriptInputAsync(input); }
+		catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException)
+		{
+			Status = string.Format(ChatText.ScriptInputError, ex.Message);
+		}
+	}
+
+	private void ScriptInputAvailabilityChanged(bool available) => Dispatcher.UIThread.Invoke(() =>
+	{
+		IsScriptInputAvailable = available;
+		if (!available) ScriptInput = "";
+	});
 
 	[RelayCommand]
 	private async Task SendAsync()
@@ -574,8 +596,10 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 	}
 	private void AppendTaskLog(string line)
 	{
-		line = (_workspace?.RedactLocal(line) ?? line) + Environment.NewLine;
-		_localLog.Append(line); TaskLog = TrimLog(TaskLog + line);
+		_localLog.Append(line).AppendLine();
+		var redacted = _workspace?.RedactLocal(_localLog.ToString()) ?? _localLog.ToString();
+		_localLog.Clear().Append(redacted);
+		TaskLog = TrimLog(redacted);
 	}
 	private static string TrimLog(string text) => text.Length <= 200_000 ? text : text[^200_000..];
 	private static bool IsExpected(Exception ex) => ex is IOException or UnauthorizedAccessException or

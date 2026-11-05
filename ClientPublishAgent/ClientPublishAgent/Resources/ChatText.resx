@@ -33,6 +33,10 @@
   <data name="Latest" xml:space="preserve"><value>↓ 最新消息</value></data>
   <data name="Logs" xml:space="preserve"><value>本地日志</value></data>
   <data name="LogHint" xml:space="preserve"><value>任务输出保留在本地，不会自动发送给模型。</value></data>
+	<data name="ScriptInputHint" xml:space="preserve"><value>脚本正在运行：请查看下方输出并按提示输入（可提交空行）。输入仅发送给本地进程；脚本可能回显，请勿输入密码或密钥。不支持隐藏输入和需要真实终端的按键读取。</value></data>
+  <data name="ScriptInputPlaceholder" xml:space="preserve"><value>输入脚本要求的内容</value></data>
+  <data name="ScriptInputSend" xml:space="preserve"><value>发送到脚本</value></data>
+  <data name="ScriptInputError" xml:space="preserve"><value>无法发送脚本输入：{0}</value></data>
 	<data name="Parameters" xml:space="preserve"><value>目录：{0}
 当前版本：{1}
 目标版本：{2}

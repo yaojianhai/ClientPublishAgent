@@ -38,6 +38,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
     private readonly Action<string> _output;
     private readonly SemaphoreSlim _mutex = new(1, 1);
     private readonly SemaphoreSlim _scriptMutex = new(1, 1);
+    private readonly PowerShellTaskRunner _taskRunner = new();
     private readonly object _sync = new();
     private readonly List<Pending> _pending = new();
     private readonly List<Grant> _grants = new();
@@ -59,6 +60,15 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
 
     public HarnessState State { get { lock (_sync) return _state; } }
     public bool ApproveForSession { get { lock (_sync) return _approveForSession; } }
+    /// <summary>Reports when an approved task can receive local standard input.</summary>
+    public event Action<bool> ScriptInputAvailabilityChanged
+    {
+        add => _taskRunner.InputAvailabilityChanged += value;
+        remove => _taskRunner.InputAvailabilityChanged -= value;
+    }
+    /// <summary>Sends one line directly to the running task, not to the model.</summary>
+    public Task SendScriptInputAsync(string input, CancellationToken cancellationToken = default) =>
+        _taskRunner.SendInputAsync(input, cancellationToken);
     public string RedactLocal(string text) => PlatformStore.Redact(text, _apiKey);
     #pragma warning disable MAAI001
     public bool HasBackgroundWork => _session is not null &&
@@ -476,7 +486,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
                 _output($"发布根目录：{current.Root}");
                 _output($"执行任务：{args.Task}，当前版本：{args.Current}，目标版本：{args.Next}，地址：{args.Host}");
                 var progress = new OutputProgress(_output);
-                int code = await new PowerShellTaskRunner().RunAsync(script, args.Current, args.Next, args.Host, progress, cancellationToken).ConfigureAwait(false);
+                int code = await _taskRunner.RunAsync(script, args.Current, args.Next, args.Host, progress, cancellationToken).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
                 progress.ThrowIfFailed();
                 _output(code == 0 ? "脚本执行完成，请检查日志及产物。" : $"脚本执行失败（退出代码 {code}）。");
@@ -740,8 +750,8 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
             var progress = new OutputProgress(_output);
             int code;
             if (name == "run_terminal")
-                code = await new PowerShellTaskRunner().RunProcessAsync(snapshot.Hash, ["-NoProfile", "-NonInteractive", "-Command", Get("command")],
-                    snapshot.Path, progress, ct).ConfigureAwait(false);
+                code = await _taskRunner.RunProcessAsync(snapshot.Hash, ["-NoProfile", "-Command", Get("command")],
+                    snapshot.Path, progress, ct, interactive: true).ConfigureAwait(false);
             else
             {
                 var request = new PluginRequest(Get("task"), Get("task") == "marketserver" ? _settings.Profile!.MarketServerRoot : _settings.Profile!.ScriptsDirectory,
@@ -757,7 +767,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
                             locks.Add(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read));
                     if (await GenericSnapshotAsync(name, arguments, ct).ConfigureAwait(false) != grant.Snapshot)
                         throw new InvalidOperationException("Plugin dependencies changed after approval.");
-                    code = await new PowerShellTaskRunner().RunProcessAsync(command.Executable, command.Arguments, command.Directory, progress, ct).ConfigureAwait(false);
+                    code = await _taskRunner.RunProcessAsync(command.Executable, command.Arguments, command.Directory, progress, ct, interactive: true).ConfigureAwait(false);
                 }
                 finally { foreach (var file in locks) file.Dispose(); }
             }
