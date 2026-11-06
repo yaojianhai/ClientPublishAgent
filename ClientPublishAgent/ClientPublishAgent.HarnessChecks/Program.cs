@@ -24,6 +24,11 @@ try
     Environment.SetEnvironmentVariable(keyName, "local-test-key");
     await using var model = new FakeModel();
     var output = new ConcurrentQueue<string>();
+    if (args.Contains("--script-manager", StringComparer.Ordinal))
+    {
+        CheckScriptManager();
+        return;
+    }
     if (args.Contains("--interactive", StringComparer.Ordinal))
     {
         await CheckInteractiveTasksAsync(model, root, keyName, ct);
@@ -38,6 +43,7 @@ try
     }
     Check(new AgentWorkspaceViewModel(new PlatformStore(Path.Combine(root, "empty-cache"))).KeyEnvironmentVariable == "", "no default API key variable");
     CheckHistoryIsolation(root);
+    CheckScriptManager();
     try
     {
         using var missing = new HarnessWorkspace(new HarnessSettings(model.Endpoint, "fake-model", keyName + "_MISSING", root), output.Enqueue);
@@ -77,6 +83,44 @@ finally
     Environment.SetEnvironmentVariable(keyName, null);
     Directory.Delete(root, true);
 }
+
+    static void CheckScriptManager()
+    {
+        var scripts = Path.Combine(AppContext.BaseDirectory, "Scripts");
+        var folder = Path.Combine(scripts, "check-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var file = Path.Combine(folder, "example.ps1");
+            var encoding = new UTF8Encoding(true, true);
+            File.WriteAllText(file, "original", encoding);
+            var viewModel = new ScriptManagerViewModel();
+            viewModel.SelectedScript = null;
+            var notifications = new List<string?>();
+            viewModel.PropertyChanged += (_, e) => notifications.Add(e.PropertyName);
+            viewModel.SelectedScript = Path.GetRelativePath(scripts, file);
+            Check(viewModel.CanSave && viewModel.ScriptContent == "original" && notifications.Contains(nameof(viewModel.CanSave)), "script editor load and save state notification");
+            viewModel.ScriptContent = "modified";
+            viewModel.SaveScriptCommand.Execute(null);
+            Check(File.ReadAllBytes(file).AsSpan().StartsWith(encoding.Preamble) && File.ReadAllText(file) == "modified", "script editor preserves UTF-8 BOM");
+            File.WriteAllText(file, "external", encoding);
+            viewModel.RefreshScriptsCommand.Execute(null);
+            Check(viewModel.ScriptContent == "external", "script editor refresh reloads selected file");
+            viewModel.SelectedScript = Path.Combine("..", Path.GetFileName(folder), "example.ps1");
+            Check(!viewModel.CanSave, "script editor blocks paths outside Scripts");
+            viewModel.SaveScriptCommand.Execute(null);
+            Check(File.ReadAllText(file) == "external", "failed script load cannot overwrite file");
+            viewModel.SelectedScript = Path.GetRelativePath(scripts, file);
+            File.Delete(file);
+            viewModel.SaveScriptCommand.Execute(null);
+            Check(!File.Exists(file), "script editor does not recreate a removed file");
+        }
+        finally
+        {
+            Directory.Delete(folder, true);
+        }
+        Console.WriteLine("Script manager checks passed.");
+    }
 
     static async Task CheckInteractiveTasksAsync(FakeModel model, string root, string keyName, CancellationToken ct)
     {

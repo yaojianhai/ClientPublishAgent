@@ -1,0 +1,36 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ClientPublishAgent.ViewModels"
+             x:Class="ClientPublishAgent.Views.ScriptManagerView"
+             x:DataType="vm:ScriptManagerViewModel">
+    <UserControl.DataContext>
+        <vm:ScriptManagerViewModel />
+    </UserControl.DataContext>
+    <Grid RowDefinitions="Auto,*,Auto" Margin="24" RowSpacing="12">
+        <StackPanel Spacing="4">
+            <TextBlock Text="内置脚本管理" FontSize="24" FontWeight="Bold" />
+            <TextBlock Text="脚本目录随应用发布。选择左侧目录树中的文件后，可在右侧编辑并保存。" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding ScriptsRoot}" TextWrapping="Wrap" />
+        </StackPanel>
+        <Grid Grid.Row="1" ColumnDefinitions="320,*" ColumnSpacing="16">
+            <Grid RowDefinitions="Auto,*">
+                <Button Content="刷新文件列表" Command="{Binding RefreshScriptsCommand}" />
+                <TreeView Grid.Row="1" ItemsSource="{Binding ScriptTree}" SelectedItem="{Binding SelectedTreeNode, Mode=TwoWay}">
+                    <TreeView.DataTemplates>
+                        <TreeDataTemplate DataType="{x:Type vm:ScriptTreeNode}" ItemsSource="{Binding Children}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <TextBlock Text="{Binding Icon}" />
+                                <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </TreeDataTemplate>
+                    </TreeView.DataTemplates>
+                </TreeView>
+            </Grid>
+            <TextBox Grid.Column="1" Text="{Binding ScriptContent, Mode=TwoWay}" AcceptsReturn="True" TextWrapping="NoWrap" FontFamily="Cascadia Mono,Consolas,monospace" ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto" IsEnabled="{Binding CanSave}" />
+        </Grid>
+        <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="12">
+            <TextBlock Text="{Binding Status}" TextWrapping="Wrap" VerticalAlignment="Center" />
+            <Button Grid.Column="1" Content="保存脚本" Command="{Binding SaveScriptCommand}" IsEnabled="{Binding CanSave}" MinWidth="120" />
+        </Grid>
+    </Grid>
+</UserControl>

@@ -1,0 +1,33 @@
+﻿<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ClientPublishAgent.ViewModels"
+             x:Class="ClientPublishAgent.Views.PackagingPathsView"
+             x:DataType="vm:PackagingPathsViewModel">
+    <UserControl.DataContext><vm:PackagingPathsViewModel /></UserControl.DataContext>
+    <ScrollViewer>
+    <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" Margin="24" RowSpacing="12" MaxWidth="900" HorizontalAlignment="Left">
+        <TextBlock Text="打包源码目录配置" FontSize="24" FontWeight="Bold" />
+        <TextBlock Grid.Row="1" Text="设置包含 WarrenqF1.Desktop、WarrenqF1.Updater 等项目的 src 目录。此配置在本机保存，手工打包和 Agent 打包共用。" TextWrapping="Wrap" />
+        <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+            <TextBox Text="{Binding SourceDirectory}" PlaceholderText="选择或粘贴 src 目录绝对路径" />
+            <Button Grid.Column="1" Content="保存源码目录" Command="{Binding SaveCommand}" MinWidth="120" />
+        </Grid>
+        <TextBlock Grid.Row="3" Text="Windows 打包输出根目录（保存至 Scripts/Desktop/win-package/publish-config.json）：" TextWrapping="Wrap" />
+        <Grid Grid.Row="4" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+            <TextBox Text="{Binding PublishRootDirectory}" PlaceholderText="例如 D:\Publish\WarrenqF1\win-x64" />
+            <Button Grid.Column="1" Content="保存输出目录" Command="{Binding SavePublishRootCommand}" MinWidth="120" />
+        </Grid>
+        <TextBlock Grid.Row="5" Text="Linux 打包输出基础目录（保存至同一 publish-config.json，自动追加 linux-x64/linux-arm64）：" TextWrapping="Wrap" />
+        <Grid Grid.Row="6" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+            <TextBox Text="{Binding LinuxPublishRootDirectory}" PlaceholderText="例如 /data/publish 或 D:\Publish\Linux" />
+            <Button Grid.Column="1" Content="保存 Linux 目录" Command="{Binding SaveLinuxPublishRootCommand}" MinWidth="120" />
+        </Grid>
+        <TextBlock Grid.Row="7" Text="macOS 打包输出基础目录（自动追加 osx-x64/osx-arm64）：" TextWrapping="Wrap" />
+        <Grid Grid.Row="8" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+            <TextBox Text="{Binding MacOSPublishRootDirectory}" PlaceholderText="例如 /Users/Shared/publish" />
+            <Button Grid.Column="1" Content="保存 macOS 目录" Command="{Binding SaveMacOSPublishRootCommand}" MinWidth="120" />
+        </Grid>
+        <TextBlock Grid.Row="9" Text="{Binding Status}" TextWrapping="Wrap" />
+    </Grid>
+    </ScrollViewer>
+</UserControl>

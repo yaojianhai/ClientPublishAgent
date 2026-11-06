@@ -1,0 +1,27 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ClientPublishAgent.ViewModels"
+             x:Class="ClientPublishAgent.Views.ScriptEditor"
+             x:DataType="vm:ScriptManagerViewModel">
+    <UserControl.DataContext>
+        <vm:ScriptManagerViewModel />
+    </UserControl.DataContext>
+    <Grid RowDefinitions="Auto,*,Auto" Margin="24" RowSpacing="12">
+        <StackPanel Spacing="4">
+            <TextBlock Text="内置脚本管理" FontSize="24" FontWeight="Bold" />
+            <TextBlock Text="脚本目录随应用发布。编辑后保存会直接更新本地 Scripts 文件；安装到只读目录时请使用可写位置运行或修改部署目录权限。" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding ScriptsRoot}" TextWrapping="Wrap" />
+        </StackPanel>
+        <Grid Grid.Row="1" ColumnDefinitions="300,*" ColumnSpacing="16">
+            <Grid RowDefinitions="Auto,*">
+                <Button Content="刷新文件列表" Command="{Binding RefreshScriptsCommand}" />
+                <ListBox Grid.Row="1" ItemsSource="{Binding ScriptFiles}" SelectedItem="{Binding SelectedScript}" />
+            </Grid>
+            <TextBox Grid.Column="1" Text="{Binding ScriptContent, Mode=TwoWay}" AcceptsReturn="True" TextWrapping="NoWrap" FontFamily="Cascadia Mono,Consolas,monospace" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" IsEnabled="{Binding CanSave}" />
+        </Grid>
+        <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="12">
+            <TextBlock Text="{Binding Status}" TextWrapping="Wrap" VerticalAlignment="Center" />
+            <Button Grid.Column="1" Content="保存脚本" Command="{Binding SaveScriptCommand}" IsEnabled="{Binding CanSave}" MinWidth="120" />
+        </Grid>
+    </Grid>
+</UserControl>

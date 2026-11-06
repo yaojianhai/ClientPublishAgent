@@ -7,8 +7,9 @@ using System.Text.RegularExpressions;
 namespace ClientPublishAgent.Services;
 
 public enum NativeHost { Windows, Linux, MacOS }
-public sealed record PluginRequest(string Task, string ScriptsRoot, string RuntimeIdentifier, string CurrentVersion, string NextVersion, string OssHost);
-public sealed record PluginCommand(string Executable, IReadOnlyList<string> Arguments, string Directory, string OutputRoot);
+public sealed record PluginRequest(string Task, string ScriptsRoot, string RuntimeIdentifier, string CurrentVersion, string NextVersion, string OssHost, string SourceDirectory = "", string PackageType = "upgrade-installer");
+public sealed record PluginCommand(string Executable, IReadOnlyList<string> Arguments, string Directory, string OutputRoot,
+    string? ScriptPath = null, string? SourceDirectory = null);
 public interface ITaskPlugin
 {
     string Id { get; }
@@ -38,7 +39,7 @@ public static class TaskCatalog
                 throw new ArgumentException("Version must be x.y.z.");
             return version;
         }
-        if (Parse(request.NextVersion) <= Parse(request.CurrentVersion)) throw new ArgumentException("Next version must exceed current.");
+        if (Parse(request.NextVersion) < Parse(request.CurrentVersion)) throw new ArgumentException("Next version cannot be lower than current.");
         if (request.OssHost.Length > 2048 || request.OssHost.Any(char.IsControl)) throw new ArgumentException("Invalid OSS address.");
     }
     public static string RequireCommand(string name)
@@ -66,18 +67,42 @@ public static class TaskCatalog
             var path = Path.Combine(directory, script);
             if (!File.Exists(path)) throw new FileNotFoundException("Plugin script missing.", path);
             var args = new List<string> { "-NoProfile" };
+            var sourceDirectory = string.IsNullOrWhiteSpace(request.SourceDirectory) ? string.Empty : Path.GetFullPath(request.SourceDirectory);
+            var packageType = string.IsNullOrWhiteSpace(request.PackageType) ? "upgrade-installer" : request.PackageType.Trim();
             if (OperatingSystem.IsWindows()) args.AddRange(["-ExecutionPolicy", "Bypass"]);
             args.AddRange(["-File", path, "-CurrentVersion", request.CurrentVersion, "-NextVersion", request.NextVersion]);
-            if (id != "windows-package") args.AddRange(["-RuntimeIdentifier", request.RuntimeIdentifier]);
+            if (id != "marketserver" && !string.IsNullOrWhiteSpace(sourceDirectory)) args.AddRange(["-SourceDirectory", sourceDirectory]);
+            args.AddRange(["-RuntimeIdentifier", request.RuntimeIdentifier, "-PackageType", packageType]);
             if (!string.IsNullOrEmpty(request.OssHost)) args.AddRange(["-OssHost", request.OssHost]);
-            var root = Path.Combine(Directory.GetParent(request.ScriptsRoot)?.FullName ?? request.ScriptsRoot, "publish", request.RuntimeIdentifier);
-            if (id == "windows-package")
+            var repositoryRoot = Directory.GetParent(request.ScriptsRoot)?.Parent?.FullName ?? request.ScriptsRoot;
+            var root = Path.Combine(repositoryRoot, "publish", request.RuntimeIdentifier);
+            if (id is "windows-package" or "linux-package" or "macos-package")
             {
-                using var config = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "publish-config.json")));
-                root = config.RootElement.GetProperty("RootDirectory").GetString() ?? throw new InvalidDataException("Invalid publish root.");
-                if (!Path.IsPathFullyQualified(root)) throw new InvalidDataException("Publish root must be absolute.");
+                var configPath = Path.Combine(Path.GetFullPath(request.ScriptsRoot), "win-package", "publish-config.json");
+                using var config = System.Text.Json.JsonDocument.Parse(File.ReadAllText(configPath));
+                var propertyName = id switch
+                {
+                    "windows-package" => "RootDirectory",
+                    "linux-package" => "LinuxRootDirectory",
+                    _ => "MacOSRootDirectory"
+                };
+                if (config.RootElement.TryGetProperty(propertyName, out var configuredRoot) &&
+                    configuredRoot.ValueKind == System.Text.Json.JsonValueKind.String &&
+                    !string.IsNullOrWhiteSpace(configuredRoot.GetString()))
+                {
+                    var configuredBase = configuredRoot.GetString()!;
+                    var isPosixAbsolute = configuredBase.StartsWith("/", StringComparison.Ordinal);
+                    if (!Path.IsPathFullyQualified(configuredBase) && !isPosixAbsolute) throw new InvalidDataException(propertyName + " must be an absolute path.");
+                    var configuredBaseWithoutSeparator = configuredBase.TrimEnd('/', '\\');
+                    root = id == "windows-package" || configuredBaseWithoutSeparator.EndsWith(request.RuntimeIdentifier, StringComparison.Ordinal)
+                        ? configuredBase
+                        : isPosixAbsolute
+                            ? $"{configuredBaseWithoutSeparator}/{request.RuntimeIdentifier}"
+                            : Path.Combine(configuredBase, request.RuntimeIdentifier);
+                }
+                if (id != "windows-package") args.AddRange(["-RootDirectory", root]);
             }
-            return new PluginCommand(shell, args, directory, root);
+            return new PluginCommand(shell, args, directory, root, path, sourceDirectory);
         }
     }
     private sealed class MarketServerPlugin : ITaskPlugin
@@ -91,13 +116,18 @@ public static class TaskCatalog
             ValidateRequest(request);
             RequireCommand("clang");
             var executable = RequireCommand("dotnet");
-            var root = Path.GetFullPath(request.ScriptsRoot);
-            var project = Path.Combine(root, "src", "WarrenqF1.MarketServer", "WarrenqF1.MarketServer.csproj");
+            var root = Path.GetFullPath(string.IsNullOrWhiteSpace(request.SourceDirectory) ? request.ScriptsRoot : request.SourceDirectory);
+            var sourceDirectory = string.IsNullOrWhiteSpace(request.SourceDirectory)
+                ? Path.Combine(root, "src")
+                : Path.GetFullPath(request.SourceDirectory);
+            var project = Path.Combine(sourceDirectory, "WarrenqF1.MarketServer", "WarrenqF1.MarketServer.csproj");
             if (!File.Exists(project)) throw new FileNotFoundException("MarketServer project missing.", project);
-            var output = Path.Combine(root, "publish", "marketserver", "linux-x64");
+            var repositoryRoot = Directory.GetParent(sourceDirectory)?.FullName ?? root;
+            var output = Path.Combine(repositoryRoot, "publish", "marketserver", "linux-x64");
             return new PluginCommand(executable, ["publish", project, "--configuration", "Release", "--runtime", "linux-x64",
                 "--self-contained", "true", "--output", output, "-p:PublishAot=true", "-p:PublishTrimmed=true", "-p:GLibcVersion=2.28",
-                "-p:StripSymbols=true", "-p:DebugSymbols=false", "-p:DebugType=None", "-p:CopyOutputSymbolsToPublishDirectory=false"], root, output);
+                "-p:StripSymbols=true", "-p:DebugSymbols=false", "-p:DebugType=None", "-p:CopyOutputSymbolsToPublishDirectory=false"], sourceDirectory, output,
+                SourceDirectory: sourceDirectory);
         }
     }
 }

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms</value></resheader>
+  <data name="DirectoryMissing" xml:space="preserve"><value>内置脚本目录不存在：{0}</value></data>
+  <data name="FileCount" xml:space="preserve"><value>共 {0} 个可编辑文本文件：{1}</value></data>
+  <data name="LoadFailed" xml:space="preserve"><value>读取失败：{0}</value></data>
+  <data name="FileTooLarge" xml:space="preserve"><value>文件超过 1 MB，不适合在编辑器中打开。</value></data>
+  <data name="Saved" xml:space="preserve"><value>已保存：{0}</value></data>
+  <data name="SaveFailed" xml:space="preserve"><value>保存失败：{0}</value></data>
+  <data name="Loaded" xml:space="preserve"><value>已加载：{0}</value></data>
+  <data name="InvalidPath" xml:space="preserve"><value>只能访问 Scripts 目录内支持的文本文件。</value></data>
+  <data name="LinkedPath" xml:space="preserve"><value>不允许通过符号链接访问或修改文件。</value></data>
+</root>

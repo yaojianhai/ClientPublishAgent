@@ -486,7 +486,12 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
                 _output($"发布根目录：{current.Root}");
                 _output($"执行任务：{args.Task}，当前版本：{args.Current}，目标版本：{args.Next}，地址：{args.Host}");
                 var progress = new OutputProgress(_output);
-                int code = await _taskRunner.RunAsync(script, args.Current, args.Next, args.Host, progress, cancellationToken).ConfigureAwait(false);
+                // Keep legacy agent tasks passing the shared src configuration into PowerShell.
+                var sourceDirectory = PackagingPathProvider.SourceDirectory;
+                if (string.IsNullOrWhiteSpace(sourceDirectory) || !Directory.Exists(sourceDirectory))
+                    throw new InvalidOperationException("请先在“打包目录配置”中设置有效的 src 目录。");
+                int code = await _taskRunner.RunAsync(script, args.Current, args.Next, args.Host, progress, cancellationToken,
+                    new Dictionary<string, string?> { ["CLIENT_PUBLISH_SOURCE_DIRECTORY"] = sourceDirectory }).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
                 progress.ThrowIfFailed();
                 _output(code == 0 ? "脚本执行完成，请检查日志及产物。" : $"脚本执行失败（退出代码 {code}）。");
@@ -526,7 +531,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
                 throw new ArgumentException("Versions must be three numeric components, e.g. 1.2.3.");
             return v;
         }
-        if (Parse(next) <= Parse(current)) throw new ArgumentException("Next version must exceed current version.");
+        if (Parse(next) < Parse(current)) throw new ArgumentException("Next version cannot be lower than current version.");
         if (host.Length > 2048 || host.Any(char.IsControl)) throw new ArgumentException("Invalid OSS address.");
         return new Arguments(task, current, next, host);
     }
@@ -536,11 +541,14 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
         var configBytes = await File.ReadAllBytesAsync(Path.Combine(_settings.ScriptsDirectory, "publish-config.json"), ct).ConfigureAwait(false);
         using var json = JsonDocument.Parse(configBytes);
         if (!json.RootElement.TryGetProperty("RootDirectory", out var root) || root.ValueKind != JsonValueKind.String ||
-            string.IsNullOrWhiteSpace(root.GetString()) || !Path.IsPathFullyQualified(root.GetString()!))
+            string.IsNullOrWhiteSpace(root.GetString()) || !IsAbsolutePublishRoot(root.GetString()!))
             throw new InvalidOperationException("publish-config.json must contain an absolute RootDirectory.");
         var scriptBytes = await File.ReadAllBytesAsync(Path.Combine(_settings.ScriptsDirectory, Scripts[args.Task]), ct).ConfigureAwait(false);
         return new Snapshot(root.GetString()!, Convert.ToHexString(SHA256.HashData(configBytes)), Convert.ToHexString(SHA256.HashData(scriptBytes)));
     }
+
+    private static bool IsAbsolutePublishRoot(string path) =>
+        Path.IsPathFullyQualified(path) || path.StartsWith("/", StringComparison.Ordinal);
 
     private Task<string> ReadFileAsync(string path, CancellationToken cancellationToken = default) =>
         ExecuteGenericAsync("read_workspace_file", new Dictionary<string, object?> { ["path"] = path }, cancellationToken);
@@ -663,16 +671,23 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
         {
             if (!profile.Packaging) throw new UnauthorizedAccessException("Task plugins disabled.");
             var request = new PluginRequest(Get("task"), Get("task") == "marketserver" ? profile.MarketServerRoot : profile.ScriptsDirectory,
-                Get("runtimeIdentifier"), Get("currentVersion"), Get("nextVersion"), Get("ossHost"));
+                Get("runtimeIdentifier"), Get("currentVersion"), Get("nextVersion"), Get("ossHost"), PackagingPathProvider.SourceDirectory);
             Validate("upgrade", request.CurrentVersion, request.NextVersion, request.OssHost);
+            if (string.IsNullOrWhiteSpace(request.SourceDirectory) || !Directory.Exists(request.SourceDirectory))
+                    throw new InvalidOperationException("请先在“打包目录配置”中设置有效的 src 目录。");
             var command = TaskCatalog.Get(request.Task).Prepare(request);
             WorkspaceBoundary.CheckNoLinks(command.Directory);
-            var hashes = new List<string> { command.Executable, command.OutputRoot };
+            var hashes = new List<string>
+            {
+                command.Executable,
+                command.OutputRoot,
+                "SourceDirectory:" + Path.GetFullPath(request.SourceDirectory)
+            };
             // Lock the whole script/config dependency set into the approval, not only its wrapper.
             var paths = Directory.EnumerateFiles(command.Directory, "*", request.Task == "marketserver" ? SearchOption.TopDirectoryOnly : SearchOption.AllDirectories)
                 .Where(p => Path.GetExtension(p) is ".ps1" or ".json" or ".csproj" or ".props" or ".targets").OrderBy(p => p, StringComparer.Ordinal).ToArray();
             if (request.Task == "marketserver")
-                paths = [Path.Combine(command.Directory, "src", "WarrenqF1.MarketServer", "WarrenqF1.MarketServer.csproj")];
+                paths = [Path.Combine(request.SourceDirectory, "WarrenqF1.MarketServer", "WarrenqF1.MarketServer.csproj")];
             if (paths.Length > 500) throw new InvalidOperationException("Too many plugin dependencies.");
             foreach (var path in paths)
             {
@@ -755,7 +770,9 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
             else
             {
                 var request = new PluginRequest(Get("task"), Get("task") == "marketserver" ? _settings.Profile!.MarketServerRoot : _settings.Profile!.ScriptsDirectory,
-                    Get("runtimeIdentifier"), Get("currentVersion"), Get("nextVersion"), Get("ossHost"));
+                    Get("runtimeIdentifier"), Get("currentVersion"), Get("nextVersion"), Get("ossHost"), PackagingPathProvider.SourceDirectory);
+                if (string.IsNullOrWhiteSpace(request.SourceDirectory) || !Directory.Exists(request.SourceDirectory))
+                    throw new InvalidOperationException("src 目录配置已失效，请重新配置后再批准打包任务。");
                 var command = TaskCatalog.Get(request.Task).Prepare(request);
                 // Windows sharing locks stop edits while PowerShell reads the approved dependencies.
                 var locks = new List<FileStream>();
@@ -765,9 +782,18 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
                         foreach (var path in Directory.EnumerateFiles(command.Directory, "*", SearchOption.AllDirectories)
                             .Where(p => Path.GetExtension(p) is ".ps1" or ".json"))
                             locks.Add(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read));
+                    if (request.Task == "marketserver")
+                        locks.Add(new FileStream(Path.Combine(request.SourceDirectory, "WarrenqF1.MarketServer", "WarrenqF1.MarketServer.csproj"), FileMode.Open, FileAccess.Read, FileShare.Read));
                     if (await GenericSnapshotAsync(name, arguments, ct).ConfigureAwait(false) != grant.Snapshot)
                         throw new InvalidOperationException("Plugin dependencies changed after approval.");
-                    code = await _taskRunner.RunProcessAsync(command.Executable, command.Arguments, command.Directory, progress, ct, interactive: true).ConfigureAwait(false);
+                    var environment = new Dictionary<string, string?>
+                    {
+                        ["CLIENT_PUBLISH_SOURCE_DIRECTORY"] = request.SourceDirectory
+                    };
+                    if (command.ScriptPath is not null)
+                        environment["PATH"] = string.Join(Path.PathSeparator, request.SourceDirectory, Environment.GetEnvironmentVariable("PATH") ?? "");
+                    code = await _taskRunner.RunProcessAsync(command.Executable, command.Arguments, command.Directory,
+                        progress, ct, interactive: true, environment: environment).ConfigureAwait(false);
                 }
                 finally { foreach (var file in locks) file.Dispose(); }
             }

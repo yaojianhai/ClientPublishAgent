@@ -20,10 +20,17 @@
         <Grid Grid.Row="1" ColumnDefinitions="360,*" ColumnSpacing="24">
             <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto">
                 <StackPanel Spacing="8" IsEnabled="{Binding !IsRunning}">
-                    <TextBlock Text="任务" FontWeight="SemiBold" />
-                    <ComboBox ItemsSource="{Binding Tasks}" SelectedItem="{Binding SelectedTask}" HorizontalAlignment="Stretch" />
-                    <TextBlock Text="脚本目录（旧任务 win-package，插件 Scripts 根目录；MarketServer 仓库根目录）" FontWeight="SemiBold" TextWrapping="Wrap" />
-                    <TextBox Text="{Binding ScriptsDirectory}" />
+                    <TextBlock Text="发布系统" FontWeight="SemiBold" />
+                    <ComboBox ItemsSource="{Binding Systems}" SelectedItem="{Binding SelectedSystem}" HorizontalAlignment="Stretch" />
+                    <TextBlock Text="CPU 架构" FontWeight="SemiBold" />
+                    <ComboBox ItemsSource="{Binding Architectures}" SelectedItem="{Binding SelectedArchitecture}" HorizontalAlignment="Stretch" />
+                    <TextBlock Text="发布类型" FontWeight="SemiBold" />
+                    <ComboBox ItemsSource="{Binding ReleaseTypes}" SelectedItem="{Binding SelectedReleaseType}" HorizontalAlignment="Stretch" />
+                    <TextBlock Text="{Binding SelectionStatus}" TextWrapping="Wrap" />
+                    <TextBlock Text="内置脚本目录（随应用发布，可在“脚本管理”页编辑）" FontWeight="SemiBold" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding DesktopScriptsDirectory}" TextWrapping="Wrap" />
+                    <TextBlock Text="所有发布类型都会先编译并发布 AOT 版本，再按选择生成升级包、安装包或两者。源码目录由主窗口“打包目录配置”统一设置。" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding SourceDirectory}" TextWrapping="Wrap" />
                     <TextBlock Text="当前版本" FontWeight="SemiBold" />
                     <TextBox Text="{Binding CurrentVersion}" PlaceholderText="例如 1.0.0" />
                     <TextBlock Text="目标版本" FontWeight="SemiBold" />

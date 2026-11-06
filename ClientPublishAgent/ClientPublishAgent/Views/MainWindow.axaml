@@ -1,4 +1,5 @@
 ﻿<Window xmlns="https://github.com/avaloniaui"
+        xmlns:controls="using:Avalonia.Controls"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:ClientPublishAgent.ViewModels"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
@@ -9,12 +10,20 @@
         Width="1000" Height="720" MinWidth="800" MinHeight="600"
         Icon="/Assets/avalonia-logo.ico"
         Title="个人工作平台">
-        <TabControl>
+    <Window.Content>
+        <controls:TabControl>
             <TabItem Header="Agent 工作区">
                 <views:AgentView x:Name="AgentWorkspace" />
             </TabItem>
             <TabItem Header="手工跨平台任务">
                 <views:MainView />
             </TabItem>
-        </TabControl>
+            <TabItem Header="打包目录配置">
+                <views:PackageSourceEditorView />
+            </TabItem>
+            <TabItem Header="脚本管理">
+                <views:ScriptManagerView />
+            </TabItem>
+        </controls:TabControl>
+    </Window.Content>
 </Window>

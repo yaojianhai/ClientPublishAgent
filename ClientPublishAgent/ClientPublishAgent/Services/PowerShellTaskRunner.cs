@@ -24,13 +24,15 @@ public sealed class PowerShellTaskRunner
 	public event Action<bool>? InputAvailabilityChanged;
 
 	public async Task<int> RunAsync(string scriptPath, string currentVersion, string nextVersion,
-		string ossHost, IProgress<string> output, CancellationToken cancellationToken)
+		string ossHost, IProgress<string> output, CancellationToken cancellationToken,
+		IReadOnlyDictionary<string, string?>? environment = null)
 	{
 		var arguments = new List<string> { "-NoProfile", "-File", scriptPath,
 			"-CurrentVersion", currentVersion, "-NextVersion", nextVersion };
 		if (OperatingSystem.IsWindows()) { arguments.InsertRange(1, ["-ExecutionPolicy", "Bypass"]); }
 		if (!string.IsNullOrWhiteSpace(ossHost)) { arguments.Add("-OssHost"); arguments.Add(ossHost); }
-		return await RunProcessAsync(ResolvePowerShell(), arguments, Path.GetDirectoryName(scriptPath)!, output, cancellationToken, interactive: true);
+		return await RunProcessAsync(ResolvePowerShell(), arguments, Path.GetDirectoryName(scriptPath)!, output,
+			cancellationToken, interactive: true, environment: environment);
 	}
 
 	/// <summary>Writes one line to the active interactive process without recording it in task output.</summary>
@@ -69,14 +71,15 @@ public sealed class PowerShellTaskRunner
 	}
 
 	public async Task<int> RunProcessAsync(string executable, IEnumerable<string> arguments, string directory,
-		IProgress<string> output, CancellationToken cancellationToken, bool interactive = false)
+		IProgress<string> output, CancellationToken cancellationToken, bool interactive = false,
+		IReadOnlyDictionary<string, string?>? environment = null)
 	{
 		var processArguments = arguments.ToArray();
 		if (interactive && (Path.GetFileNameWithoutExtension(executable).Equals("powershell", StringComparison.OrdinalIgnoreCase) ||
 			Path.GetFileNameWithoutExtension(executable).Equals("pwsh", StringComparison.OrdinalIgnoreCase)))
 			processArguments = PrepareInteractivePowerShellArguments(processArguments);
 		await ExecutionGate.WaitAsync(cancellationToken);
-		try { return await RunCoreAsync(executable, processArguments, directory, output, cancellationToken, interactive); }
+		try { return await RunCoreAsync(executable, processArguments, directory, output, cancellationToken, interactive, environment); }
 		finally { ExecutionGate.Release(); }
 	}
 
@@ -115,7 +118,8 @@ public sealed class PowerShellTaskRunner
 	}
 
 	private async Task<int> RunCoreAsync(string executable, IEnumerable<string> arguments, string directory,
-		IProgress<string> output, CancellationToken cancellationToken, bool interactive)
+		IProgress<string> output, CancellationToken cancellationToken, bool interactive,
+		IReadOnlyDictionary<string, string?>? environment)
 	{
 		cancellationToken.ThrowIfCancellationRequested();
 		var startInfo = new ProcessStartInfo
@@ -128,6 +132,8 @@ public sealed class PowerShellTaskRunner
 			RedirectStandardError = true,
 			RedirectStandardInput = true
 		};
+		if (environment is not null)
+			foreach (var entry in environment) startInfo.Environment[entry.Key] = entry.Value;
 		if (interactive && (Path.GetFileNameWithoutExtension(executable).Equals("powershell", StringComparison.OrdinalIgnoreCase) ||
 			Path.GetFileNameWithoutExtension(executable).Equals("pwsh", StringComparison.OrdinalIgnoreCase)))
 		{
