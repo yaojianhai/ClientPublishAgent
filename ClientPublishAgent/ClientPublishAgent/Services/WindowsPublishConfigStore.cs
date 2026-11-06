@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace ClientPublishAgent.Services;
 
@@ -18,7 +19,7 @@ public sealed class WindowsPublishConfigStore
 		_configPath = configPath ?? ConfigPath;
 		if (!File.Exists(_configPath)) return;
 
-		var config = JsonSerializer.Deserialize<Configuration>(File.ReadAllText(_configPath));
+		var config = JsonSerializer.Deserialize(File.ReadAllText(_configPath), WindowsPublishConfigJsonContext.Default.Configuration);
 		RootDirectory = config?.RootDirectory ?? "";
 		LinuxRootDirectory = config?.LinuxRootDirectory ?? "";
 		MacOSRootDirectory = config?.MacOSRootDirectory ?? "";
@@ -63,7 +64,7 @@ public sealed class WindowsPublishConfigStore
 		var temporary = _configPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
 		try
 		{
-			File.WriteAllText(temporary, JsonSerializer.Serialize(configuration, SerializerOptions));
+			File.WriteAllText(temporary, JsonSerializer.Serialize(configuration, WindowsPublishConfigJsonContext.Default.Configuration));
 			File.Move(temporary, _configPath, true);
 		}
 		finally
@@ -76,5 +77,10 @@ public sealed class WindowsPublishConfigStore
 		(path.Length >= 3 && char.IsAsciiLetter(path[0]) && path[1] == ':' && (path[2] == '\\' || path[2] == '/')) ||
 		path.StartsWith("\\\\", StringComparison.Ordinal);
 
-	private sealed record Configuration(string RootDirectory, string LinuxRootDirectory = "", string MacOSRootDirectory = "");
+	internal sealed record Configuration(string RootDirectory, string LinuxRootDirectory = "", string MacOSRootDirectory = "");
+}
+
+[System.Text.Json.Serialization.JsonSerializable(typeof(WindowsPublishConfigStore.Configuration))]
+internal partial class WindowsPublishConfigJsonContext : JsonSerializerContext
+{
 }

@@ -9,6 +9,7 @@ using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -66,6 +67,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
         add => _taskRunner.InputAvailabilityChanged += value;
         remove => _taskRunner.InputAvailabilityChanged -= value;
     }
+
     /// <summary>Sends one line directly to the running task, not to the model.</summary>
     public Task SendScriptInputAsync(string input, CancellationToken cancellationToken = default) =>
         _taskRunner.SendInputAsync(input, cancellationToken);
@@ -81,6 +83,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
         if (session is not null && provider is not null)
             await provider.ReleaseSessionAsync(session, true, Timeout.InfiniteTimeSpan).ConfigureAwait(false);
     }
+
     #pragma warning restore MAAI001
     public IReadOnlyList<HarnessApproval> PendingApprovals { get { lock (_sync) return _pending.Select(p => p.Display).Concat(_genericPending.Select(p => p.Display)).ToArray(); } }
 
@@ -107,6 +110,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
             if (string.IsNullOrWhiteSpace(key))
                 key = Environment.GetEnvironmentVariable(variableName, EnvironmentVariableTarget.Machine);
         }
+
         if (string.IsNullOrWhiteSpace(key))
             throw new InvalidOperationException("未找到指定的密钥环境变量或其值为空。请检查变量名及用户或系统环境变量设置。");
         _apiKey = key;
@@ -410,8 +414,13 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
                         var arguments = CanonicalArguments(call.Arguments);
                         var genericSnapshot = await GenericSnapshotAsync(call.Name, arguments, cts.Token).ConfigureAwait(false);
                         using var displayArguments = JsonDocument.Parse(arguments);
-                        var readable = JsonSerializer.Serialize(displayArguments.RootElement, new JsonSerializerOptions
-                        { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+                        using var readableStream = new MemoryStream();
+                        using (var writer = new Utf8JsonWriter(readableStream, new JsonWriterOptions
+                        { Indented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+                        {
+                            displayArguments.RootElement.WriteTo(writer);
+                        }
+                        var readable = System.Text.Encoding.UTF8.GetString(readableStream.ToArray());
                         genericPending.Add(new GenericPending(request, call.Name, arguments, genericSnapshot,
                             new HarnessApproval(Guid.NewGuid(), call.Name, "", "", "", _settings.Profile!.WorkspaceRoot,
                                 RedactLocal(readable) + "\n\n" + genericSnapshot.Details)));
@@ -586,7 +595,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
             if (await GenericSnapshotAsync(function.Name, arguments, ct).ConfigureAwait(false) != grant.Snapshot)
                 return "Skill files changed after approval. Request a new approval.";
             var value = await function.InvokeAsync(values, ct).ConfigureAwait(false);
-            return ContextSecrets.Scrub(value is string text ? text : JsonSerializer.Serialize(value), _apiKey);
+            return ContextSecrets.Scrub(value is string text ? text : JsonSerializer.Serialize(value, HarnessJsonContext.Default.Object), _apiKey);
         }
         finally { foreach (var file in locks) file.Dispose(); }
     }
@@ -599,7 +608,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
 
     private static string CanonicalArguments(IDictionary<string, object?>? arguments) =>
         JsonSerializer.Serialize((arguments ?? new Dictionary<string, object?>()).OrderBy(p => p.Key, StringComparer.Ordinal)
-            .ToDictionary(p => p.Key, p => p.Value));
+            .ToDictionary(p => p.Key, p => p.Value), HarnessJsonContext.Default.DictionaryStringObject);
 
     private async Task<GenericSnapshot> GenericSnapshotAsync(string name, string arguments, CancellationToken ct)
     {
@@ -862,4 +871,11 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
         public void Report(string value) { try { output(value); } catch (Exception ex) { Interlocked.CompareExchange(ref _error, ex, null); } }
         public void ThrowIfFailed() { if (_error is not null) throw new InvalidOperationException("The script output callback failed.", _error); }
     }
+}
+
+[System.Text.Json.Serialization.JsonSerializable(typeof(object))]
+[System.Text.Json.Serialization.JsonSerializable(typeof(Dictionary<string, object?>))]
+[System.Text.Json.Serialization.JsonSerializable(typeof(JsonElement))]
+internal partial class HarnessJsonContext : System.Text.Json.Serialization.JsonSerializerContext
+{
 }

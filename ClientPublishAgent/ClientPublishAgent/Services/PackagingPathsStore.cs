@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace ClientPublishAgent.Services;
 
@@ -17,7 +18,7 @@ public sealed class PackagingPathsStore
 			Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
 			"PersonalAgentPlatform", "packaging-paths.json");
 		if (!File.Exists(_configPath)) return;
-		var config = JsonSerializer.Deserialize<Configuration>(File.ReadAllText(_configPath));
+		var config = JsonSerializer.Deserialize(File.ReadAllText(_configPath), PackagingPathsJsonContext.Default.Configuration);
 		if (config?.SourceDirectory is { Length: > 0 } directory && Path.IsPathFullyQualified(directory))
 			SourceDirectory = Path.GetFullPath(directory);
 	}
@@ -33,7 +34,7 @@ public sealed class PackagingPathsStore
 		var temporary = _configPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
 		try
 		{
-			File.WriteAllText(temporary, JsonSerializer.Serialize(new Configuration(path)));
+			File.WriteAllText(temporary, JsonSerializer.Serialize(new Configuration(path), PackagingPathsJsonContext.Default.Configuration));
 			File.Move(temporary, _configPath, true);
 			SourceDirectory = path;
 			SourceDirectoryChanged?.Invoke(path);
@@ -44,5 +45,10 @@ public sealed class PackagingPathsStore
 		}
 	}
 
-	private sealed record Configuration(string SourceDirectory);
+	internal sealed record Configuration(string SourceDirectory);
+}
+
+[System.Text.Json.Serialization.JsonSerializable(typeof(PackagingPathsStore.Configuration))]
+internal partial class PackagingPathsJsonContext : JsonSerializerContext
+{
 }

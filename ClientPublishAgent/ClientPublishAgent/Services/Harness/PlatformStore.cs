@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Net;
 
@@ -44,7 +45,7 @@ public sealed record AgentProfile
     public string? SearchEndpoint { get; init; }
     [System.Text.Json.Serialization.JsonIgnore]
     public string Binding => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-        JsonSerializer.Serialize(this))));
+        JsonSerializer.Serialize(this, PlatformJsonContext.Default.AgentProfile))));
     public override string ToString() => Name;
 }
 
@@ -90,7 +91,7 @@ public sealed class PlatformStore
     {
         var path = Path.Combine(_root, "profiles.json");
         if (!File.Exists(path)) return [new AgentProfile()];
-        var data = JsonSerializer.Deserialize<ProfilesDocument>(File.ReadAllText(path)) ?? throw new InvalidDataException("Invalid profiles cache.");
+        var data = JsonSerializer.Deserialize(File.ReadAllText(path), PlatformJsonContext.Default.ProfilesDocument) ?? throw new InvalidDataException("Invalid profiles cache.");
         if (data.Version is not (1 or 2)) throw new InvalidDataException("Unsupported profiles cache version.");
         if (data.Profiles.Count == 0 || data.Profiles.Select(p => p.Id).Distinct().Count() != data.Profiles.Count)
             throw new InvalidDataException("Invalid profile identities.");
@@ -106,11 +107,11 @@ public sealed class PlatformStore
         foreach (var profile in list)
         {
             var secret = ReadKey(profile.KeyEnvironmentVariable);
-            if (!string.IsNullOrEmpty(secret) && JsonSerializer.SerializeToElement(profile).EnumerateObject().Any(p =>
+            if (!string.IsNullOrEmpty(secret) && JsonSerializer.SerializeToElement(profile, PlatformJsonContext.Default.AgentProfile).EnumerateObject().Any(p =>
                 p.Value.ValueKind == JsonValueKind.String && p.Value.GetString()!.Contains(secret, StringComparison.Ordinal)))
                 throw new InvalidOperationException("配置中出现密钥值，拒绝保存。仅填写密钥环境变量名。");
         }
-        AtomicWrite(Path.Combine(_root, "profiles.json"), new ProfilesDocument(2, list, selected));
+        AtomicWrite(Path.Combine(_root, "profiles.json"), new ProfilesDocument(2, list, selected), PlatformJsonContext.Default.ProfilesDocument);
         LastSelectedProfileId = selected;
     }
     public static void ValidateProfile(AgentProfile profile)
@@ -129,7 +130,7 @@ public sealed class PlatformStore
         if (profile.SearchEndpoint is not null) SearxSearch.ValidateEndpoint(profile.SearchEndpoint);
         if (profile.WebSearch && profile.SearchEndpoint is null) throw new ArgumentException("Configure a SearXNG JSON search endpoint first.");
         var key = ReadKey(profile.KeyEnvironmentVariable);
-        if (!string.IsNullOrEmpty(key) && JsonSerializer.SerializeToElement(profile).EnumerateObject().Any(p =>
+        if (!string.IsNullOrEmpty(key) && JsonSerializer.SerializeToElement(profile, PlatformJsonContext.Default.AgentProfile).EnumerateObject().Any(p =>
             p.Value.ValueKind == JsonValueKind.String && p.Value.GetString()!.Contains(key, StringComparison.Ordinal)))
             throw new InvalidOperationException("配置中出现密钥值，拒绝保存或绑定。仅填写密钥环境变量名。");
     }
@@ -165,7 +166,7 @@ public sealed class PlatformStore
                 return JsonValue.Create(Redact(text, key));
             return node;
         }
-        return JsonSerializer.SerializeToElement(Scrub(JsonNode.Parse(state.GetRawText())));
+        return JsonSerializer.SerializeToElement(Scrub(JsonNode.Parse(state.GetRawText())), PlatformJsonContext.Default.JsonNode);
     }
     public void Save(StoredConversation conversation)
     {
@@ -183,12 +184,12 @@ public sealed class PlatformStore
                 Messages = conversation.Messages?.Select(m => m with { Title = Redact(m.Title, key), Text = Redact(m.Text, key) }).ToArray(),
                 Session = RedactState(conversation.Session, key) };
         }
-        AtomicWrite(SessionPath(conversation.Id), conversation with { Updated = DateTimeOffset.UtcNow });
+        AtomicWrite(SessionPath(conversation.Id), conversation with { Updated = DateTimeOffset.UtcNow }, PlatformJsonContext.Default.StoredConversation);
     }
     public StoredConversation Load(Guid id)
     {
         WorkspaceBoundary.CheckNoLinks(SessionPath(id));
-        var data = JsonSerializer.Deserialize<StoredConversation>(File.ReadAllText(SessionPath(id)))
+        var data = JsonSerializer.Deserialize(File.ReadAllText(SessionPath(id)), PlatformJsonContext.Default.StoredConversation)
             ?? throw new InvalidDataException("Invalid conversation cache.");
         if (data.Version != 1 || data.HarnessVersion != "1.27.0" || data.Id != id || data.Session.ValueKind != JsonValueKind.Object ||
             data.ProfileId == Guid.Empty || data.Name is null || data.Transcript is null ||
@@ -232,7 +233,7 @@ public sealed class PlatformStore
             throw new InvalidOperationException("历史会话绑定的 Agent 配置不同。请恢复原配置，或创建新会话；不会将历史发送给其他模型。");
     }
     private string SessionPath(Guid id) => Path.Combine(_root, id.ToString("N") + ".session.json");
-    private static void AtomicWrite<T>(string path, T data)
+    private static void AtomicWrite<T>(string path, T data, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo)
     {
         WorkspaceBoundary.CheckNoLinks(path);
         var staging = path + "." + Guid.NewGuid().ToString("N") + ".writing";
@@ -241,14 +242,22 @@ public sealed class PlatformStore
             using (var file = new FileStream(staging, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
                 if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(staging, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-                JsonSerializer.Serialize(file, data);
+                JsonSerializer.Serialize(file, data, typeInfo);
                 file.Flush(true);
             }
             File.Move(staging, path, true);
         }
         finally { if (File.Exists(staging)) File.Delete(staging); }
     }
-    private sealed record ProfilesDocument(int Version, List<AgentProfile> Profiles, Guid? SelectedProfileId = null);
+    internal sealed record ProfilesDocument(int Version, List<AgentProfile> Profiles, Guid? SelectedProfileId = null);
+}
+
+[System.Text.Json.Serialization.JsonSerializable(typeof(AgentProfile))]
+[System.Text.Json.Serialization.JsonSerializable(typeof(StoredConversation))]
+[System.Text.Json.Serialization.JsonSerializable(typeof(PlatformStore.ProfilesDocument))]
+[System.Text.Json.Serialization.JsonSerializable(typeof(JsonNode))]
+internal partial class PlatformJsonContext : System.Text.Json.Serialization.JsonSerializerContext
+{
 }
 
 public static class WorkspaceBoundary

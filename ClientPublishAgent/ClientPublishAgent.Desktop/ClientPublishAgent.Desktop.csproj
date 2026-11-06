@@ -1,22 +1,23 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <RootNamespace>ClientPublishAgent</RootNamespace>
-    <OutputType>WinExe</OutputType>
-    <!--If you are willing to use platform-specific APIs, use conditional compilation.
+	<PropertyGroup>
+		<RootNamespace>ClientPublishAgent</RootNamespace>
+		<OutputType>WinExe</OutputType>
+		<!--If you are willing to use platform-specific APIs, use conditional compilation.
     See https://docs.avaloniaui.net/docs/guides/platforms/platform-specific-code/dotnet for more details.-->
-    <TargetFramework>net10.0</TargetFramework>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<PublishAot>true</PublishAot>
+	</PropertyGroup>
 
-  <PropertyGroup>
-    <ApplicationManifest>app.manifest</ApplicationManifest>
-  </PropertyGroup>
+	<PropertyGroup>
+		<ApplicationManifest>app.manifest</ApplicationManifest>
+	</PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Avalonia.Desktop" />
-  </ItemGroup>
+	<ItemGroup>
+		<PackageReference Include="Avalonia.Desktop" />
+	</ItemGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\ClientPublishAgent\ClientPublishAgent.csproj" />
-  </ItemGroup>
+	<ItemGroup>
+		<ProjectReference Include="..\ClientPublishAgent\ClientPublishAgent.csproj" />
+	</ItemGroup>
 </Project>

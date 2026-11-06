@@ -540,7 +540,7 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 			Messages = ChatItems.Select(c => c.Snapshot()).Select(m => m with { Title = _workspace.RedactLocal(m.Title), Text = _workspace.RedactLocal(m.Text) }).ToArray(),
 			UnsafeToResume = unsafeState, Updated = DateTimeOffset.UtcNow };
 		_store!.Save(_current);
-		HarnessInfo = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
+		HarnessInfo = state.ToString();
 		if (state.TryGetProperty("stateBag", out var bag))
 		{
 			ModeText = bag.TryGetProperty("AgentModeProvider", out var mode) && mode.TryGetProperty("currentMode", out var value)
