@@ -62,12 +62,6 @@ if ($PackageType -eq "installer") {
 	[System.IO.File]::WriteAllText((Join-Path $stagingDirectory "generalupdate.manifest.json"), ($manifest | ConvertTo-Json -Compress), [System.Text.UTF8Encoding]::new($false))
 }
 if ($PackageType -in "installer", "upgrade-installer") { & $packageScript @packageParameters }
-$manifestFile = Join-Path $rootDirectory "StagingRelease/generalupdate.manifest.json"
-if (Test-Path -LiteralPath $manifestFile -PathType Leaf) {
-	$manifest = Get-Content -LiteralPath $manifestFile -Raw | ConvertFrom-Json -ErrorAction Stop
-	$clientVersion = ([string]$manifest.clientVersion).Trim()
-	if (-not [string]::IsNullOrWhiteSpace($clientVersion)) { Backup-StagingRelease -StagingDirectory (Join-Path $rootDirectory "StagingRelease") -Version $clientVersion }
-}
 $stagingDirectory = Join-Path $rootDirectory "StagingRelease"
 $manifestFile = Join-Path $stagingDirectory "generalupdate.manifest.json"
 if (-not (Test-Path -LiteralPath $manifestFile -PathType Leaf)) { throw "未找到升级发布清单：$manifestFile" }

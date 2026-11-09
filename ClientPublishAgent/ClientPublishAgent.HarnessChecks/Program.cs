@@ -1099,6 +1099,32 @@ finally
             var injection = "https://host/'; Write-Output 'injected";
             var command = TaskCatalog.Get("windows-package").Prepare(new PluginRequest("windows-package", root, "win-x64", "1.0.0", "1.0.1", injection));
             Check(command.Arguments.Last() == injection && !command.Arguments.Contains("-Command"), "plugin parameters use argument boundaries, not shell interpolation");
+            var linuxScripts = Path.Combine(root, "linux-package"); Directory.CreateDirectory(linuxScripts);
+            File.WriteAllText(Path.Combine(linuxScripts, "linux-publish&upgrade&package.ps1"), "exit 0");
+            var shellDirectory = Path.Combine(root, "test-pwsh"); Directory.CreateDirectory(shellDirectory);
+            var shellPath = Path.Combine(shellDirectory, "pwsh.exe"); File.WriteAllText(shellPath, "");
+            var previousPath = Environment.GetEnvironmentVariable("PATH");
+            try
+            {
+                Environment.SetEnvironmentVariable("PATH", shellDirectory + Path.PathSeparator + Environment.GetFolderPath(Environment.SpecialFolder.System));
+                var linuxCommand = TaskCatalog.Get("linux-package").Prepare(new PluginRequest("linux-package", root, "linux-x64", "1.0.0", "1.0.1", ""));
+                Check(linuxCommand.Executable == shellPath, "Linux plugin resolves PowerShell 7 from PATH");
+                Environment.SetEnvironmentVariable("PATH", Environment.GetFolderPath(Environment.SpecialFolder.System));
+                var installed = new[] { Environment.SpecialFolder.ProgramFiles, Environment.SpecialFolder.ProgramFilesX86 }
+                    .Select(Environment.GetFolderPath).Where(p => !string.IsNullOrEmpty(p))
+                    .Select(p => Path.Combine(p, "PowerShell", "7", "pwsh.exe")).FirstOrDefault(File.Exists);
+                if (installed is null)
+                {
+                    try { TaskCatalog.Get("linux-package").Prepare(new PluginRequest("linux-package", root, "linux-x64", "1.0.0", "1.0.1", "")); throw new Exception("FAIL: Linux plugin accepted missing PowerShell 7"); }
+                    catch (PlatformNotSupportedException ex) { Check(ex.Message.Contains("PowerShell 7") && ex.Message.Contains("WSL Debian"), "missing PowerShell 7 explains Windows and WSL prerequisites"); }
+                }
+                else
+                {
+                    var linuxCommandFromInstall = TaskCatalog.Get("linux-package").Prepare(new PluginRequest("linux-package", root, "linux-x64", "1.0.0", "1.0.1", ""));
+                    Check(linuxCommandFromInstall.Executable == installed, "Linux plugin resolves PowerShell 7 from standard installation directory");
+                }
+            }
+            finally { Environment.SetEnvironmentVariable("PATH", previousPath); }
         }
         store.Delete(stored.Id);
         Check(store.Search("", profile.Id).Count == 0, "session deletion persisted");

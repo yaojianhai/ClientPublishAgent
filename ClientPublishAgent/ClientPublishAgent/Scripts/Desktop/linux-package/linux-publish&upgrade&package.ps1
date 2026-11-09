@@ -54,5 +54,5 @@ if ($PackageType -eq "upgrade-installer") {
 	& (Join-Path $PSScriptRoot "package-linux.ps1") @packageParameters
 }
 if ($PackageType -eq "installer") {
-	Backup-StagingRelease -StagingDirectory (Join-Path $resolvedRootDirectory "StagingRelease") -Version $NextVersion
+	& (Join-Path $PSScriptRoot "backup-linux-staging.ps1") -RootDirectory $resolvedRootDirectory -Version $NextVersion
 }

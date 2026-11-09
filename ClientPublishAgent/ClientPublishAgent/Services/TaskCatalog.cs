@@ -60,7 +60,7 @@ public static class TaskCatalog
         {
             if (!Supports(Host, request.RuntimeIdentifier)) throw new PlatformNotSupportedException("Invalid native host/runtime combination for " + Id);
             ValidateRequest(request);
-            var shell = id == "windows-package" ? PowerShellTaskRunner.ResolvePowerShell() : RequireCommand("pwsh");
+            var shell = id == "windows-package" ? PowerShellTaskRunner.ResolvePowerShell() : PowerShellTaskRunner.ResolvePowerShell7();
             if (id == "linux-package") RequireCommand(Host == NativeHost.Windows ? "wsl" : "dpkg-deb");
             if (id == "macos-package") RequireCommand("hdiutil");
             var directory = Path.Combine(Path.GetFullPath(request.ScriptsRoot), folder);

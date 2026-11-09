@@ -60,14 +60,37 @@ public sealed class PowerShellTaskRunner
 
 	public static string ResolvePowerShell()
 	{
+		var path = FindPowerShell7();
+		if (path is not null) return path;
+		if (OperatingSystem.IsWindows())
+			return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
+		throw new PlatformNotSupportedException("未找到 PowerShell 7 (pwsh)。请先安装 PowerShell 7 并将其目录加入 PATH，然后重启应用。");
+	}
+
+	internal static string ResolvePowerShell7() => FindPowerShell7() ??
+		throw new PlatformNotSupportedException(OperatingSystem.IsWindows()
+			? "未找到 Windows 版 PowerShell 7 (pwsh)。请安装 PowerShell 7 或将其安装目录加入 PATH，然后重启应用。Windows 上执行 Linux 打包时，WSL Debian 内也需要安装 PowerShell 7。"
+			: "未找到 PowerShell 7 (pwsh)。请先安装 PowerShell 7 并将其目录加入 PATH，然后重启应用。");
+
+	private static string? FindPowerShell7()
+	{
 		foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
 		{
+			if (string.IsNullOrWhiteSpace(directory)) continue;
 			var path = Path.Combine(directory.Trim('"'), OperatingSystem.IsWindows() ? "pwsh.exe" : "pwsh");
 			if (File.Exists(path)) return Path.GetFullPath(path);
 		}
 		if (OperatingSystem.IsWindows())
-			return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
-		throw new PlatformNotSupportedException("Linux/macOS require PowerShell 7 (pwsh) on PATH.");
+		{
+			foreach (var folder in new[] { Environment.SpecialFolder.ProgramFiles, Environment.SpecialFolder.ProgramFilesX86 })
+			{
+				var programFiles = Environment.GetFolderPath(folder);
+				if (string.IsNullOrEmpty(programFiles)) continue;
+				var path = Path.Combine(programFiles, "PowerShell", "7", "pwsh.exe");
+				if (File.Exists(path)) return path;
+			}
+		}
+		return null;
 	}
 
 	public async Task<int> RunProcessAsync(string executable, IEnumerable<string> arguments, string directory,
