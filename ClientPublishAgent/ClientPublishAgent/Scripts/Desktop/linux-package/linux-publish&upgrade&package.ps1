@@ -49,7 +49,7 @@ if ($PackageType -eq "upgrade-installer") {
 	& (Join-Path $PSScriptRoot "upgrade-linux.ps1") @upgradeOnlyParameters
 } else {
 	$stagingDirectory = Join-Path $resolvedRootDirectory "StagingRelease"
-	$packageParameters = @{ RuntimeIdentifier = $RuntimeIdentifier; RootDirectory = $resolvedRootDirectory; PublishDirectory = $stagingDirectory; ClientVersion = $NextVersion; SourceDirectory = $SourceDirectory }
+	$packageParameters = @{ RuntimeIdentifier = $RuntimeIdentifier; RootDirectory = $resolvedRootDirectory; PublishDirectory = $stagingDirectory; ClientVersion = $NextVersion; SourceDirectory = $SourceDirectory; BundleIdentifier = $BundleIdentifier }
 	if (-not [string]::IsNullOrWhiteSpace($OutputDirectory)) { $packageParameters.OutputDirectory = $OutputDirectory }
 	& (Join-Path $PSScriptRoot "package-linux.ps1") @packageParameters
 }

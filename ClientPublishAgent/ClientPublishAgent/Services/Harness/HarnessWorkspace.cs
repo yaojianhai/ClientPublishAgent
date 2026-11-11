@@ -118,23 +118,20 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
         if (settings.Profile is { } profile)
         {
             PlatformStore.ValidateProfile(profile);
-            if (!Path.IsPathFullyQualified(profile.WorkspaceRoot) || !Directory.Exists(profile.WorkspaceRoot))
-                throw new ArgumentException("Workspace root must be an existing absolute directory.");
-            WorkspaceBoundary.CheckNoLinks(profile.WorkspaceRoot);
-            if (profile.FileMemory) WorkspaceBoundary.Resolve(profile.WorkspaceRoot, profile.MemoryDirectory);
-            if (profile.Skills) WorkspaceBoundary.Resolve(profile.WorkspaceRoot, profile.SkillsDirectory);
-            if (profile.AutoMemory) ValidateAutomaticDirectory(profile.MemoryDirectory, "自动记忆", nameof(AgentProfile.AutoMemory));
-            if (profile.AutoSkills) ValidateAutomaticDirectory(profile.SkillsDirectory, "自动技能发现", nameof(AgentProfile.AutoSkills));
-
-            void ValidateAutomaticDirectory(string relative, string capability, string setting)
-            {
-                var directory = WorkspaceBoundary.Resolve(profile.WorkspaceRoot, relative);
-                if (!Directory.Exists(directory))
-                    throw new ArgumentException($"已启用{capability}，但配置目录不存在或不可访问：{directory}。请创建该目录、修改目录配置，或关闭 {setting}。", nameof(settings));
-            }
-
             if (profile.Compaction && (profile.ContextTokens < 2048 || profile.OutputTokens < 256 || profile.OutputTokens >= profile.ContextTokens / 2))
                 throw new ArgumentException("Invalid compaction token budget.");
+            WorkspaceBoundary.CheckNoLinks(profile.WorkspaceRoot);
+            Directory.CreateDirectory(profile.WorkspaceRoot);
+            WorkspaceBoundary.CheckNoLinks(profile.WorkspaceRoot);
+            if (profile.FileMemory || profile.AutoMemory) CreateContextDirectory(profile.MemoryDirectory);
+            if (profile.Skills || profile.AutoSkills) CreateContextDirectory(profile.SkillsDirectory);
+
+            void CreateContextDirectory(string relative)
+            {
+                var directory = WorkspaceBoundary.Resolve(profile.WorkspaceRoot, relative);
+                Directory.CreateDirectory(directory);
+                WorkspaceBoundary.CheckNoLinks(directory);
+            }
         }
         _output = scriptOutput;
         _http = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false, UseProxy = false, ActivityHeadersPropagator = null });

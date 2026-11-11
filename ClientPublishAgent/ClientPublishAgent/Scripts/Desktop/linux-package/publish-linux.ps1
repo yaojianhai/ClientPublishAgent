@@ -41,10 +41,11 @@ foreach ($command in $requiredCommands) {
 	if (-not (Get-Command $command -CommandType Application -ErrorAction SilentlyContinue)) { throw "未找到 Linux 发布所需命令：$command" }
 }
 if ($isWindowsHost) {
-	$preflight = '$ErrorActionPreference = "Stop"; foreach ($name in "dotnet", "dpkg-deb", "readelf", "find", "chmod") { Get-Command $name -CommandType Application -ErrorAction Stop | Out-Null }'
+	$preflight = '$ErrorActionPreference = "Stop"; foreach ($name in "dotnet", "dpkg-deb", "readelf", "find", "chmod", "ln") { Get-Command $name -CommandType Application -ErrorAction Stop | Out-Null }'
 	$encodedPreflight = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($preflight))
-	& wsl.exe -d Debian --exec pwsh -NoLogo -NoProfile -EncodedCommand $encodedPreflight
-	if ($LASTEXITCODE -ne 0) { throw "请先在 WSL Debian 中配置 PowerShell 7、.NET SDK 和 Debian 打包工具。" }
+	Initialize-WslProcessHelper
+	$preflightResult = Invoke-WslProcess -Arguments @("-d", "Debian", "--exec", "pwsh", "-NoLogo", "-NoProfile", "-EncodedCommand", $encodedPreflight)
+	if ($preflightResult.ExitCode -ne 0) { throw "请先在 WSL Debian 中配置 PowerShell 7、.NET SDK 和 Debian 打包工具。" }
 }
 Test-LinuxExecutable -Path (Join-Path $nodeSourceDirectory "node") -RuntimeIdentifier $RuntimeIdentifier
 Test-LinuxExecutable -Path (Get-OpenClaw7ZipExecutable -RuntimeIdentifier $RuntimeIdentifier -BundledOnly) -RuntimeIdentifier $RuntimeIdentifier

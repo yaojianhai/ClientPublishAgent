@@ -41,6 +41,12 @@ try
         model.AssertHealthy();
         return;
     }
+    if (args.Contains("--automatic", StringComparer.Ordinal))
+    {
+        await CheckAutomaticAsync(model, output, root, keyName, ct);
+        model.AssertHealthy();
+        return;
+    }
     Check(new AgentWorkspaceViewModel(new PlatformStore(Path.Combine(root, "empty-cache"))).KeyEnvironmentVariable == "", "no default API key variable");
     CheckHistoryIsolation(root);
     CheckScriptManager();
@@ -536,23 +542,42 @@ finally
             model.EnqueueText("disabled directories not touched");
             await disabled.SendAsync("hello", cancellationToken: ct);
             Check(!Directory.Exists(Path.Combine(root, "missing-auto-memory")), "disabled automatic memory never reads/creates configured missing directory");
+            Check(!Directory.Exists(Path.Combine(root, "missing-auto-skills")), "disabled automatic skills never reads/creates configured missing directory");
         }
-        foreach (var invalid in new[]
+        foreach (var item in new[]
         {
-            (Profile: profile with { AutoSkills = true, SkillsDirectory = "missing-auto-skills" }, Setting: nameof(AgentProfile.AutoSkills), Directory: "missing-auto-skills"),
-            (Profile: profile with { AutoMemory = true, MemoryDirectory = "missing-auto-memory" }, Setting: nameof(AgentProfile.AutoMemory), Directory: "missing-auto-memory")
+            (Profile: profile with { AutoSkills = true, SkillsDirectory = "missing-auto-skills/nested" }, Directory: "missing-auto-skills/nested"),
+            (Profile: profile with { AutoMemory = true, MemoryDirectory = "missing-auto-memory/nested" }, Directory: "missing-auto-memory/nested"),
+            (Profile: profile with { Skills = true, SkillsDirectory = "manual-skills/nested" }, Directory: "manual-skills/nested"),
+            (Profile: profile with { FileMemory = true, MemoryDirectory = "manual-memory/nested" }, Directory: "manual-memory/nested")
         })
         {
-            var requests = model.Requests.Count;
-            try
-            {
-                using var rejected = new HarnessWorkspace(Settings(invalid.Profile), output.Enqueue);
-                throw new Exception("FAIL: missing enabled automatic context directory accepted");
-            }
-            catch (ArgumentException ex) when (ex.Message.Contains(invalid.Setting) && ex.Message.Contains(Path.Combine(root, invalid.Directory))) { }
-            Check(model.Requests.Count == requests, "missing automatic directory rejected before model requests");
-            Check(!Directory.Exists(Path.Combine(root, invalid.Directory)), "missing automatic directory is not silently created");
+            using var created = new HarnessWorkspace(Settings(item.Profile), output.Enqueue);
+            await created.InitializeAsync(ct);
+            Check(Directory.Exists(Path.Combine(root, item.Directory)), "enabled context directory is created recursively");
+            model.EnqueueText("empty context ready");
+            await created.SendAsync("hello", cancellationToken: ct);
         }
+        var newRoot = Path.Combine(root, "new-workspace", "nested");
+        using (var created = new HarnessWorkspace(Settings(profile with { WorkspaceRoot = newRoot, AutoMemory = true, AutoSkills = true }), output.Enqueue))
+        {
+            await created.InitializeAsync(ct);
+            Check(Directory.Exists(Path.Combine(newRoot, "auto-memory")) && Directory.Exists(Path.Combine(newRoot, "auto-skills")), "new workspace and enabled context directories are created");
+        }
+        try
+        {
+            using var escaped = new HarnessWorkspace(Settings(profile with { AutoMemory = true, MemoryDirectory = "../outside-memory" }), output.Enqueue);
+            throw new Exception("FAIL: escaped context directory accepted");
+        }
+        catch (UnauthorizedAccessException) { }
+        var collision = Path.Combine(root, "context-file");
+        await File.WriteAllTextAsync(collision, "not a directory", ct);
+        try
+        {
+            using var invalid = new HarnessWorkspace(Settings(profile with { AutoMemory = true, MemoryDirectory = "context-file" }), output.Enqueue);
+            throw new Exception("FAIL: file accepted as context directory");
+        }
+        catch (IOException) { }
         // Default new fields are omitted, preserving the exact historical SHA256 serialization binding.
         var legacyNode = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(profile))!.AsObject();
         foreach (var name in new[] { "AutoMemory", "AutoSkills", "WebSearch", "SearchEndpoint" }) legacyNode.Remove(name);
