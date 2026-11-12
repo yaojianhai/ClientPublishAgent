@@ -7,6 +7,14 @@ Linux deb 应用识别与联网策略
 - linux-publish&upgrade&package.ps1 的 installer / upgrade-installer 分支
 升级差分包本身不安装桌面入口；旧版 deb 用户需要先安装一次新版 deb，才能获得本次修复。
 
+Linux 发布脚本按宿主系统执行
+----------------------------
+- Windows：publish-linux.ps1 将完整 Linux 发布流程转交给 WSL Debian 执行；Windows 负责传递脚本参数和路径。
+- Linux：在当前系统原生运行 dotnet、Clang 和 Linux 发布工具，不再启动 WSL。
+- linux-publish&upgrade&package.ps1 等组合入口沿用此规则：Windows 发布交给 WSL；后续打包/升级入口也会在 Windows 下各自交给 WSL，Linux 则原生执行。
+- WSL Debian 需安装 PowerShell 7、.NET SDK、Clang/LLVM、objcopy、tar；制 deb 还需 dpkg-deb、readelf、find、chmod、ln。
+- 源码目录、根目录或输出目录可传 Windows 绝对路径；Windows 分支会转换成 WSL 路径。Linux 分支直接使用 Linux 路径。
+
 本次打包规则
 ------------
 1. 主程序与更新器的桌面入口均指向 /opt/WarrenqF1/warrenqf1。

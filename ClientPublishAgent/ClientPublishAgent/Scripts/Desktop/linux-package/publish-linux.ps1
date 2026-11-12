@@ -18,6 +18,19 @@ $defaultSourceDirectory = Join-Path (Split-Path -Parent $scriptsDirectory) "src"
 $srcDirectory = if ([string]::IsNullOrWhiteSpace($SourceDirectory)) { $defaultSourceDirectory } else { [System.IO.Path]::GetFullPath($SourceDirectory) }
 $repoRoot = Split-Path -Parent $srcDirectory
 $rootDirectory = Resolve-DesktopPublishRootDirectory -RuntimeIdentifier $RuntimeIdentifier -RepositoryRoot $repoRoot -RootDirectory $RootDirectory
+if ($isWindowsHost) {
+	$wslParameters = @{
+		RuntimeIdentifier = $RuntimeIdentifier
+		RootDirectory = $rootDirectory
+		DownloadOpenClaw = $DownloadOpenClaw
+		DownloadNodeModules = $DownloadNodeModules
+	}
+	if (-not [string]::IsNullOrWhiteSpace($SourceDirectory)) { $wslParameters.SourceDirectory = $SourceDirectory }
+	Invoke-LinuxScriptInWsl -ScriptPath $PSCommandPath -Parameters $wslParameters
+	return
+}
+
+$hostRuntimeIdentifier = Get-LinuxRuntimeIdentifier
 $artifactsDirectory = Join-Path $rootDirectory "artifacts"
 $publishDirectory = Join-Path $rootDirectory "StagingRelease"
 $updaterDirectory = Join-Path $publishDirectory "update"
@@ -36,24 +49,13 @@ if (-not (Test-Path -LiteralPath $nodeSourceDirectory -PathType Container)) {
 . (Join-Path $scriptsDirectory "publish-openclaw.ps1")
 . (Join-Path $scriptsDirectory "copy-office.ps1")
 
-$requiredCommands = if ($isWindowsHost) { "dotnet", "tar", "wsl.exe" } else { "dotnet", "chmod", "tar", "clang", "objcopy" }
+$requiredCommands = "dotnet", "chmod", "tar", "clang", "objcopy"
 foreach ($command in $requiredCommands) {
 	if (-not (Get-Command $command -CommandType Application -ErrorAction SilentlyContinue)) { throw "未找到 Linux 发布所需命令：$command" }
 }
-if ($isWindowsHost) {
-	$preflight = '$ErrorActionPreference = "Stop"; foreach ($name in "dotnet", "dpkg-deb", "readelf", "find", "chmod", "ln") { Get-Command $name -CommandType Application -ErrorAction Stop | Out-Null }'
-	$encodedPreflight = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($preflight))
-	Initialize-WslProcessHelper
-	$preflightResult = Invoke-WslProcess -Arguments @("-d", "Debian", "--exec", "pwsh", "-NoLogo", "-NoProfile", "-EncodedCommand", $encodedPreflight)
-	if ($preflightResult.ExitCode -ne 0) { throw "请先在 WSL Debian 中配置 PowerShell 7、.NET SDK 和 Debian 打包工具。" }
-}
 Test-LinuxExecutable -Path (Join-Path $nodeSourceDirectory "node") -RuntimeIdentifier $RuntimeIdentifier
 Test-LinuxExecutable -Path (Get-OpenClaw7ZipExecutable -RuntimeIdentifier $RuntimeIdentifier -BundledOnly) -RuntimeIdentifier $RuntimeIdentifier
-if ($isWindowsHost) {
-	$null = Get-OpenClaw7ZipExecutable -RuntimeIdentifier $hostRuntimeIdentifier -BundledOnly
-} else {
-	Test-LinuxExecutable -Path (Get-OpenClaw7ZipExecutable -RuntimeIdentifier $hostRuntimeIdentifier -BundledOnly) -RuntimeIdentifier $hostRuntimeIdentifier
-}
+Test-LinuxExecutable -Path (Get-OpenClaw7ZipExecutable -RuntimeIdentifier $hostRuntimeIdentifier -BundledOnly) -RuntimeIdentifier $hostRuntimeIdentifier
 
 function Publish-Project {
 	param([Parameter(Mandatory)][string]$ProjectPath, [Parameter(Mandatory)][string]$OutputDirectory)

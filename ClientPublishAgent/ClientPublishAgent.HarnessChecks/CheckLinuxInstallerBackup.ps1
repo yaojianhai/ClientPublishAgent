@@ -20,6 +20,12 @@ try {
 	if ((Get-Content -LiteralPath (Join-Path $backup "package-completed.txt") -Raw).Trim() -ne "1.0.1") { throw "备份未包含安装包处理后的文件。" }
 	if ((Get-Content -LiteralPath (Join-Path $backup "bundle-identifier.txt") -Raw).Trim() -ne "com.example.warrenq") { throw "安装包流程未传递 BundleIdentifier。" }
 	if (Test-Path -LiteralPath (Join-Path $publishRoot "OldRelease")) { throw "安装包流程不应修改升级基线。" }
+	if ($IsWindows) {
+		. (Join-Path $linux "linux-common.ps1")
+		$probePath = Join-Path $linux "boolean argument probe.ps1"
+		Set-Content -LiteralPath $probePath -Value 'param([bool]$Enabled, [bool]$Disabled, [string]$Message) if (-not $Enabled -or $Disabled -or $Message -cne "path with spaces and apostrophe''s") { throw "WSL argument binding failed." }' -Encoding utf8
+		Invoke-LinuxScriptInWsl -ScriptPath $probePath -Parameters ([ordered]@{ Enabled = $true; Disabled = $false; Message = "path with spaces and apostrophe's" })
+	}
 	Write-Host "Linux 安装包备份检查通过。"
 } finally {
 	Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Continue

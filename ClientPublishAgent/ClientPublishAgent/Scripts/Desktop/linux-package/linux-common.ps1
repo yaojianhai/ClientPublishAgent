@@ -158,7 +158,6 @@ function Invoke-LinuxScriptInWsl {
 
 	if (-not (Get-Command wsl.exe -CommandType Application -ErrorAction SilentlyContinue)) { throw "未找到 WSL，请先配置 Debian 和 PowerShell 7。" }
 	Initialize-WslProcessHelper
-	$arguments = @("-NoLogo", "-NoProfile", "-File")
 	$paths = @("ScriptPath", "RootDirectory", "PatchToolPath", "PublishDirectory", "OutputDirectory", "SourceDirectory")
 	$values = [ordered]@{ ScriptPath = $ScriptPath }
 	foreach ($key in $Parameters.Keys) { $values[$key] = $Parameters[$key] }
@@ -172,8 +171,21 @@ function Invoke-LinuxScriptInWsl {
 			if ([string]::IsNullOrWhiteSpace($values[$key])) { throw "WSL 路径为空：$windowsPath" }
 		}
 	}
-	$arguments += $values.ScriptPath
-	foreach ($key in $Parameters.Keys) { $arguments += @("-$key", [string]$values[$key]) }
+	# pwsh -File treats every forwarded value as a string, so emit typed literals for booleans.
+	$invocation = [System.Text.StringBuilder]::new("& '$($values.ScriptPath.Replace("'", "''"))'")
+	foreach ($key in $Parameters.Keys) {
+		$value = $values[$key]
+		if ($null -eq $value) {
+			$literal = '$null'
+		} elseif ($value -is [bool]) {
+			$literal = if ($value) { '$true' } else { '$false' }
+		} else {
+			$literal = "'$( ([string]$value).Replace("'", "''") )'"
+		}
+		[void]$invocation.Append(" -$key ").Append($literal)
+	}
+	$encodedCommand = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($invocation.ToString()))
+	$arguments = @("-NoLogo", "-NoProfile", "-OutputFormat", "Text", "-EncodedCommand", $encodedCommand)
 	$wslLaunchArguments = @("-d", "Debian", "--exec")
 	if ($values.Contains("SourceDirectory") -and -not [string]::IsNullOrWhiteSpace([string]$values.SourceDirectory)) {
 		$wslLaunchArguments += @("env", "CLIENT_PUBLISH_SOURCE_DIRECTORY=$([string]$values.SourceDirectory)", "pwsh")
