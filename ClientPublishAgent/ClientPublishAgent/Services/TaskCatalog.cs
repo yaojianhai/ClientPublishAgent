@@ -22,6 +22,37 @@ public static class TaskCatalog
 {
     public static NativeHost Host => OperatingSystem.IsWindows() ? NativeHost.Windows :
         OperatingSystem.IsMacOS() ? NativeHost.MacOS : NativeHost.Linux;
+    public static string GetDesktopOutputRoot(string taskId, string scriptsRoot, string runtimeIdentifier)
+    {
+        var propertyName = taskId switch
+        {
+            "windows-package" => "RootDirectory",
+            "linux-package" => "LinuxRootDirectory",
+            "macos-package" => "MacOSRootDirectory",
+            _ => throw new ArgumentException("Task does not have a desktop publish output root.", nameof(taskId))
+        };
+        var fullScriptsRoot = Path.GetFullPath(scriptsRoot);
+        var repositoryRoot = Directory.GetParent(fullScriptsRoot)?.Parent?.FullName ?? fullScriptsRoot;
+        var root = Path.Combine(repositoryRoot, "publish", runtimeIdentifier);
+        var configPath = Path.Combine(fullScriptsRoot, "win-package", "publish-config.json");
+        using var config = System.Text.Json.JsonDocument.Parse(File.ReadAllText(configPath));
+        if (config.RootElement.TryGetProperty(propertyName, out var configuredRoot) &&
+            configuredRoot.ValueKind == System.Text.Json.JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(configuredRoot.GetString()))
+        {
+            var configuredBase = configuredRoot.GetString()!;
+            var isPosixAbsolute = configuredBase.StartsWith("/", StringComparison.Ordinal);
+            if (!Path.IsPathFullyQualified(configuredBase) && !isPosixAbsolute)
+                throw new InvalidDataException(propertyName + " must be an absolute path.");
+            var configuredBaseWithoutSeparator = configuredBase.TrimEnd('/', '\\');
+            root = taskId == "windows-package" || configuredBaseWithoutSeparator.EndsWith(runtimeIdentifier, StringComparison.Ordinal)
+                ? configuredBase
+                : isPosixAbsolute
+                    ? $"{configuredBaseWithoutSeparator}/{runtimeIdentifier}"
+                    : Path.Combine(configuredBase, runtimeIdentifier);
+        }
+        return root;
+    }
     public static IReadOnlyList<ITaskPlugin> Plugins { get; } =
     [
         new ScriptPlugin("windows-package", "Windows x64 · NSIS", "win-package", "publish-upgrade-package-win-x64.ps1", ["win-x64"], [NativeHost.Windows]),
@@ -78,32 +109,12 @@ public static class TaskCatalog
             if (id == "macos-package" && !string.IsNullOrWhiteSpace(request.SigningIdentity))
                 args.AddRange(["-SigningIdentity", request.SigningIdentity.Trim()]);
             if (!string.IsNullOrEmpty(request.OssHost)) args.AddRange(["-OssHost", request.OssHost]);
-            var repositoryRoot = Directory.GetParent(request.ScriptsRoot)?.Parent?.FullName ?? request.ScriptsRoot;
-            var root = Path.Combine(repositoryRoot, "publish", request.RuntimeIdentifier);
+            var root = id is "windows-package" or "linux-package" or "macos-package"
+                ? GetDesktopOutputRoot(id, request.ScriptsRoot, request.RuntimeIdentifier)
+                : Path.Combine(Directory.GetParent(Path.GetFullPath(request.ScriptsRoot))?.Parent?.FullName ?? request.ScriptsRoot,
+                    "publish", request.RuntimeIdentifier);
             if (id is "windows-package" or "linux-package" or "macos-package")
             {
-                var configPath = Path.Combine(Path.GetFullPath(request.ScriptsRoot), "win-package", "publish-config.json");
-                using var config = System.Text.Json.JsonDocument.Parse(File.ReadAllText(configPath));
-                var propertyName = id switch
-                {
-                    "windows-package" => "RootDirectory",
-                    "linux-package" => "LinuxRootDirectory",
-                    _ => "MacOSRootDirectory"
-                };
-                if (config.RootElement.TryGetProperty(propertyName, out var configuredRoot) &&
-                    configuredRoot.ValueKind == System.Text.Json.JsonValueKind.String &&
-                    !string.IsNullOrWhiteSpace(configuredRoot.GetString()))
-                {
-                    var configuredBase = configuredRoot.GetString()!;
-                    var isPosixAbsolute = configuredBase.StartsWith("/", StringComparison.Ordinal);
-                    if (!Path.IsPathFullyQualified(configuredBase) && !isPosixAbsolute) throw new InvalidDataException(propertyName + " must be an absolute path.");
-                    var configuredBaseWithoutSeparator = configuredBase.TrimEnd('/', '\\');
-                    root = id == "windows-package" || configuredBaseWithoutSeparator.EndsWith(request.RuntimeIdentifier, StringComparison.Ordinal)
-                        ? configuredBase
-                        : isPosixAbsolute
-                            ? $"{configuredBaseWithoutSeparator}/{request.RuntimeIdentifier}"
-                            : Path.Combine(configuredBase, request.RuntimeIdentifier);
-                }
                 if (id != "windows-package") args.AddRange(["-RootDirectory", root]);
             }
             return new PluginCommand(shell, args, directory, root, path, sourceDirectory);

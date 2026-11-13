@@ -36,6 +36,7 @@ public partial class MainViewModel : ViewModelBase
             {
                 OnPropertyChanged(nameof(SelectionStatus));
                 OnPropertyChanged(nameof(IsMacOSSelected));
+                OnPropertyChanged(nameof(OutputDirectory));
             }
         }
     }
@@ -46,7 +47,11 @@ public partial class MainViewModel : ViewModelBase
         get => _selectedArchitecture;
         set
         {
-            if (SetProperty(ref _selectedArchitecture, value)) OnPropertyChanged(nameof(SelectionStatus));
+            if (SetProperty(ref _selectedArchitecture, value))
+            {
+                OnPropertyChanged(nameof(SelectionStatus));
+                OnPropertyChanged(nameof(OutputDirectory));
+            }
         }
     }
 
@@ -75,6 +80,29 @@ public partial class MainViewModel : ViewModelBase
     public string MarketServerScriptsDirectory => Path.Combine(AppContext.BaseDirectory, "Scripts", "MarketServer");
     public string SourceDirectory => PackagingPathProvider.SourceDirectory;
     public bool IsMacOSSelected => SelectedSystem == "macOS";
+    public string OutputDirectory
+    {
+        get
+        {
+            var (plugin, runtime) = SelectedSystem switch
+            {
+                "Windows" => ("windows-package", "win-" + SelectedArchitecture),
+                "Linux" => ("linux-package", "linux-" + SelectedArchitecture),
+                "macOS" => ("macos-package", "osx-" + SelectedArchitecture),
+                _ => ("", "")
+            };
+            if (plugin.Length == 0) return "请选择有效的系统。";
+            try
+            {
+                return TaskCatalog.GetDesktopOutputRoot(plugin, DesktopScriptsDirectory, runtime);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or
+                InvalidDataException or ArgumentException or NotSupportedException)
+            {
+                return "无法解析打包输出目录：" + ex.Message;
+            }
+        }
+    }
 
     public string SelectionStatus => TryGetPluginSelection(out _, out _, out var reason)
         ? $"将先执行 {SelectedSystem} {SelectedArchitecture} {(PublishAot ? "Native AOT" : "非 AOT")} 发布，再生成{SelectedReleaseType}{(IsMacOSSelected ? (string.IsNullOrWhiteSpace(SigningIdentity) ? "（未配置签名）" : "（使用 Developer ID 签名）") : "")}。"
@@ -83,6 +111,7 @@ public partial class MainViewModel : ViewModelBase
     public MainViewModel()
     {
         PackagingPathsStore.SourceDirectoryChanged += SourceDirectoryChanged;
+        WindowsPublishConfigStore.ConfigurationChanged += PublishConfigurationChanged;
         _runner.InputAvailabilityChanged += available => Dispatcher.UIThread.Invoke(() =>
         {
             IsScriptInputAvailable = available;
@@ -127,6 +156,8 @@ public partial class MainViewModel : ViewModelBase
     }
 
     private void SourceDirectoryChanged(string _) => OnPropertyChanged(nameof(SourceDirectory));
+
+    private void PublishConfigurationChanged() => Dispatcher.UIThread.Post(() => OnPropertyChanged(nameof(OutputDirectory)));
 
     partial void OnPublishAotChanged(bool value) => OnPropertyChanged(nameof(SelectionStatus));
 
@@ -246,6 +277,7 @@ public partial class MainViewModel : ViewModelBase
     {
         _cancellation?.Cancel();
         while (IsRunning) await Task.Delay(30);
+        WindowsPublishConfigStore.ConfigurationChanged -= PublishConfigurationChanged;
     }
 
     private static Version ParseVersion(string? value, string label)

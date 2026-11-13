@@ -16,6 +16,9 @@ public partial class PackagingPathsViewModel : ViewModelBase
 	[ObservableProperty] private string _linuxPublishRootDirectory = "";
 	[ObservableProperty] private string _macOSPublishRootDirectory = "";
 	[ObservableProperty] public partial string Status { get; set; } = "";
+	public bool IsWindowsHost => OperatingSystem.IsWindows();
+	public bool IsLinuxHost => OperatingSystem.IsLinux();
+	public bool IsMacOSHost => OperatingSystem.IsMacOS();
 
 	public PackagingPathsViewModel()
 	{

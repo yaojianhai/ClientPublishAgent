@@ -7,9 +7,10 @@
         xmlns:views="using:ClientPublishAgent.Views"
         mc:Ignorable="d" d:DesignWidth="1000" d:DesignHeight="720"
         x:Class="ClientPublishAgent.Views.MainWindow"
-        Width="1000" Height="720" MinWidth="800" MinHeight="600"
+        Width="1200" Height="720" MinWidth="900" MinHeight="600"
         Icon="/Assets/avalonia-logo.ico"
-        Title="个人工作平台">
+        Title="个人工作平台"
+        WindowStartupLocation="CenterScreen">
     <Window.Content>
         <controls:TabControl>
             <TabItem Header="Agent 工作区">
@@ -19,7 +20,7 @@
                 <views:MainView />
             </TabItem>
             <TabItem Header="打包目录配置">
-                <views:PackageSourceEditorView />
+                <views:PackagingPathsView />
             </TabItem>
             <TabItem Header="脚本管理">
                 <views:ScriptManagerView />

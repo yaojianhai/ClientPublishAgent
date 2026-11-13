@@ -13,6 +13,7 @@ public sealed class WindowsPublishConfigStore
 	public string RootDirectory { get; private set; } = "";
 	public string LinuxRootDirectory { get; private set; } = "";
 	public string MacOSRootDirectory { get; private set; } = "";
+	public static event Action? ConfigurationChanged;
 
 	public WindowsPublishConfigStore(string? configPath = null)
 	{
@@ -66,6 +67,7 @@ public sealed class WindowsPublishConfigStore
 		{
 			File.WriteAllText(temporary, JsonSerializer.Serialize(configuration, WindowsPublishConfigJsonContext.Default.Configuration));
 			File.Move(temporary, _configPath, true);
+			ConfigurationChanged?.Invoke();
 		}
 		finally
 		{

@@ -29,6 +29,17 @@ try
         CheckScriptManager();
         return;
     }
+    if (args.Contains("--desktop-output", StringComparer.Ordinal))
+    {
+        CheckDesktopOutputRoots(root);
+        Console.WriteLine("Desktop output root checks passed.");
+        return;
+    }
+    if (args.Contains("--packaging-ui", StringComparer.Ordinal))
+    {
+        await CheckPackagingUiAsync(ct);
+        return;
+    }
     if (args.Contains("--interactive", StringComparer.Ordinal))
     {
         await CheckInteractiveTasksAsync(model, root, keyName, ct);
@@ -50,6 +61,7 @@ try
     Check(new AgentWorkspaceViewModel(new PlatformStore(Path.Combine(root, "empty-cache"))).KeyEnvironmentVariable == "", "no default API key variable");
     CheckHistoryIsolation(root);
     CheckScriptManager();
+    CheckDesktopOutputRoots(root);
     try
     {
         using var missing = new HarnessWorkspace(new HarnessSettings(model.Endpoint, "fake-model", keyName + "_MISSING", root), output.Enqueue);
@@ -126,6 +138,76 @@ finally
             Directory.Delete(folder, true);
         }
         Console.WriteLine("Script manager checks passed.");
+    }
+
+    static void CheckDesktopOutputRoots(string root)
+    {
+        var scriptsRoot = Path.Combine(root, "desktop-output-check", "Scripts", "Desktop");
+        Directory.CreateDirectory(Path.Combine(scriptsRoot, "win-package"));
+        var windowsRoot = Path.Combine(root, "windows-output", "win-x64");
+        var linuxRoot = Path.Combine(root, "linux-output");
+        var macOSRoot = Path.Combine(root, "macos-output");
+        File.WriteAllText(Path.Combine(scriptsRoot, "win-package", "publish-config.json"),
+            JsonSerializer.Serialize(new { RootDirectory = windowsRoot, LinuxRootDirectory = linuxRoot, MacOSRootDirectory = macOSRoot }));
+
+        Check(TaskCatalog.GetDesktopOutputRoot("windows-package", scriptsRoot, "win-x64") == windowsRoot,
+            "Windows output root uses configured directory");
+        Check(TaskCatalog.GetDesktopOutputRoot("linux-package", scriptsRoot, "linux-arm64") == Path.Combine(linuxRoot, "linux-arm64"),
+            "Linux output root includes selected runtime");
+        Check(TaskCatalog.GetDesktopOutputRoot("macos-package", scriptsRoot, "osx-x64") == Path.Combine(macOSRoot, "osx-x64"),
+            "macOS output root includes selected runtime");
+        File.WriteAllText(Path.Combine(scriptsRoot, "win-package", "publish-config.json"),
+            JsonSerializer.Serialize(new { LinuxRootDirectory = "/data/publish" }));
+        Check(TaskCatalog.GetDesktopOutputRoot("linux-package", scriptsRoot, "linux-x64") == "/data/publish/linux-x64",
+            "Linux POSIX output root preserves its path format");
+    }
+
+    static async Task CheckPackagingUiAsync(CancellationToken ct)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Console.WriteLine("SKIP: live packaging window checks require Windows.");
+            return;
+        }
+
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            try
+            {
+                AppBuilder.Configure<Application>().UsePlatformDetect().SetupWithoutStarting();
+                Application.Current!.Styles.Add(new FluentTheme());
+                Dispatcher.UIThread.Post(() =>
+                {
+                    MainWindow? window = null;
+                    try
+                    {
+                        window = new MainWindow { ShowInTaskbar = false };
+                        var tabs = (TabControl)window.Content!;
+                        var tab = tabs.Items.OfType<TabItem>().Single(item => Equals(item.Header, "打包目录配置"));
+                        Check(tab.Content is PackagingPathsView, "main window uses shared packaging paths view");
+                        tabs.SelectedItem = tab;
+                        window.Show();
+                        window.UpdateLayout();
+                        var view = (PackagingPathsView)tab.Content!;
+                        Check(view.FindControl<StackPanel>("WindowsOutputSection")!.IsVisible, "Windows output directory is visible on Windows");
+                        Check(!view.FindControl<StackPanel>("LinuxOutputSection")!.IsVisible, "Linux output directory is hidden on Windows");
+                        Check(!view.FindControl<StackPanel>("MacOSOutputSection")!.IsVisible, "macOS output directory is hidden on Windows");
+                        completion.TrySetResult();
+                    }
+                    catch (Exception ex) { completion.TrySetException(ex); }
+                    finally { window?.Close(); stop.Cancel(); }
+                });
+                Dispatcher.UIThread.MainLoop(stop.Token);
+            }
+            catch (Exception ex) { completion.TrySetException(ex); }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        await completion.Task.WaitAsync(ct);
+        thread.Join();
+        Console.WriteLine("Packaging window visibility checks passed.");
     }
 
     static async Task CheckInteractiveTasksAsync(FakeModel model, string root, string keyName, CancellationToken ct)

@@ -30,6 +30,8 @@
                     <TextBlock Text="{Binding SelectionStatus}" TextWrapping="Wrap" />
                     <TextBlock Text="内置脚本目录（随应用发布，可在“脚本管理”页编辑）" FontWeight="SemiBold" TextWrapping="Wrap" />
                     <TextBlock Text="{Binding DesktopScriptsDirectory}" TextWrapping="Wrap" />
+                    <TextBlock Text="当前打包输出目录" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding OutputDirectory}" TextWrapping="Wrap" />
                     <TextBlock Text="先按上方选项编译发布（默认 Native AOT），再按选择生成升级包、安装包或两者。源码目录由主窗口“打包目录配置”统一设置。" TextWrapping="Wrap" />
                     <TextBlock Text="{Binding SourceDirectory}" TextWrapping="Wrap" />
                     <TextBlock Text="当前版本" FontWeight="SemiBold" />
