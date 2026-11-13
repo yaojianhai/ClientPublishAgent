@@ -5,7 +5,7 @@
 	[string]$NextVersion,
 	[string]$OssHost,
 	[string]$OutputDirectory,
-	[string]$SigningIdentity,
+	[string]$SigningIdentity = $env:APPLE_SIGNING_IDENTITY,
 	[string]$BundleIdentifier = "com.gildata.warrenqf1"
 )
 

@@ -38,6 +38,9 @@
                     <TextBox Text="{Binding NextVersion}" PlaceholderText="例如 1.1.0" />
                     <TextBlock Text="升级地址（可选）" FontWeight="SemiBold" />
                     <TextBox Text="{Binding OssHost}" PlaceholderText="留空使用脚本默认值" />
+                    <TextBlock Text="macOS Developer ID Application 签名身份（可选）" FontWeight="SemiBold" IsVisible="{Binding IsMacOSSelected}" />
+                    <TextBox Text="{Binding SigningIdentity}" PlaceholderText="Developer ID Application: 团队名称 (TEAMID)" IsVisible="{Binding IsMacOSSelected}" />
+                    <TextBlock Text="证书和私钥需已安装在当前 Mac 钥匙串中。可用 security find-identity -v -p codesigning 查询；留空将生成未签名包。签名不包含 Apple 公证。" TextWrapping="Wrap" IsVisible="{Binding IsMacOSSelected}" />
                     <TextBlock TextWrapping="Wrap" Text="发布目录取自脚本目录下的 publish-config.json。脚本会删除暂存目录、更新旧版本基线和差分输出；运行前请检查配置并备份。" />
                     <TextBlock TextWrapping="Wrap" Text="Windows 需要 NSIS；Linux 需要 pwsh / dpkg，Windows Linux wrapper 需要 WSL Debian + pwsh；macOS 需要原生 pwsh / hdiutil。MarketServer Linux AOT 仅原生 Linux。非沙箱，请只运行可信脚本。" />
                     <CheckBox IsChecked="{Binding IsConfirmed}" Content="已检查发布目录并备份" />

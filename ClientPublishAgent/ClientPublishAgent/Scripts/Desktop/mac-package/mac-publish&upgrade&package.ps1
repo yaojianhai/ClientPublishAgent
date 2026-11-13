@@ -7,7 +7,7 @@
 	[string]$RootDirectory,
 	[string]$SourceDirectory = $env:CLIENT_PUBLISH_SOURCE_DIRECTORY,
 	[string]$OutputDirectory,
-	[string]$SigningIdentity,
+	[string]$SigningIdentity = $env:APPLE_SIGNING_IDENTITY,
 	[string]$BundleIdentifier = "com.gildata.warrenqf1",
 	[ValidateSet("upgrade", "installer", "upgrade-installer")]
 	[string]$PackageType = "upgrade-installer",

@@ -9,7 +9,7 @@
 
 	[string]$SourceDirectory = $env:CLIENT_PUBLISH_SOURCE_DIRECTORY,
 
-	[string]$SigningIdentity,
+	[string]$SigningIdentity = $env:APPLE_SIGNING_IDENTITY,
 
 	[string]$BundleIdentifier = "com.gildata.warrenqf1"
 )
@@ -196,6 +196,7 @@ try {
 
 	if (-not [string]::IsNullOrWhiteSpace($SigningIdentity)) {
 		Test-RequiredCommand -Name "codesign"
+		Write-Host "使用 Developer ID 身份签名 macOS 应用：$SigningIdentity"
 		Invoke-NativeCommand -Name "codesign" -Arguments @("--force", "--deep", "--options", "runtime", "--timestamp", "--sign", $SigningIdentity, $appBundle)
 		Invoke-NativeCommand -Name "codesign" -Arguments @("--verify", "--deep", "--strict", $appBundle)
 	}
@@ -223,6 +224,12 @@ try {
 		}
 	}
 	Invoke-NativeCommand -Name "hdiutil" -Arguments @("convert", $writableDmgFile, "-format", "UDZO", "-o", $dmgFile)
+	if (-not [string]::IsNullOrWhiteSpace($SigningIdentity)) {
+		$diskImageIdentifier = "$BundleIdentifier.dmg"
+		Write-Host "使用 Developer ID 身份签名 DMG：$SigningIdentity"
+		Invoke-NativeCommand -Name "codesign" -Arguments @("--force", "--timestamp", "--sign", $SigningIdentity, "--identifier", $diskImageIdentifier, $dmgFile)
+		Invoke-NativeCommand -Name "codesign" -Arguments @("--verify", "--strict", $dmgFile)
+	}
 }
 finally {
 	if ($dmgAttached) {

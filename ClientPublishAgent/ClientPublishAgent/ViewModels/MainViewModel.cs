@@ -32,7 +32,11 @@ public partial class MainViewModel : ViewModelBase
         get => _selectedSystem;
         set
         {
-            if (SetProperty(ref _selectedSystem, value)) OnPropertyChanged(nameof(SelectionStatus));
+            if (SetProperty(ref _selectedSystem, value))
+            {
+                OnPropertyChanged(nameof(SelectionStatus));
+                OnPropertyChanged(nameof(IsMacOSSelected));
+            }
         }
     }
 
@@ -58,6 +62,7 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty] public partial string CurrentVersion { get; set; } = "";
     [ObservableProperty] public partial string NextVersion { get; set; } = "";
     [ObservableProperty] public partial string OssHost { get; set; } = "";
+    [ObservableProperty] public partial string SigningIdentity { get; set; } = Environment.GetEnvironmentVariable("APPLE_SIGNING_IDENTITY") ?? "";
     [ObservableProperty] public partial bool IsConfirmed { get; set; }
     [ObservableProperty] public partial bool PublishAot { get; set; } = true;
     [ObservableProperty] public partial bool IsRunning { get; set; }
@@ -69,9 +74,10 @@ public partial class MainViewModel : ViewModelBase
     public string DesktopScriptsDirectory => Path.Combine(AppContext.BaseDirectory, "Scripts", "Desktop");
     public string MarketServerScriptsDirectory => Path.Combine(AppContext.BaseDirectory, "Scripts", "MarketServer");
     public string SourceDirectory => PackagingPathProvider.SourceDirectory;
+    public bool IsMacOSSelected => SelectedSystem == "macOS";
 
     public string SelectionStatus => TryGetPluginSelection(out _, out _, out var reason)
-        ? $"将先执行 {SelectedSystem} {SelectedArchitecture} {(PublishAot ? "Native AOT" : "非 AOT")} 发布，再生成{SelectedReleaseType}。"
+        ? $"将先执行 {SelectedSystem} {SelectedArchitecture} {(PublishAot ? "Native AOT" : "非 AOT")} 发布，再生成{SelectedReleaseType}{(IsMacOSSelected ? (string.IsNullOrWhiteSpace(SigningIdentity) ? "（未配置签名）" : "（使用 Developer ID 签名）") : "")}。"
         : reason;
 
     public MainViewModel()
@@ -124,6 +130,8 @@ public partial class MainViewModel : ViewModelBase
 
     partial void OnPublishAotChanged(bool value) => OnPropertyChanged(nameof(SelectionStatus));
 
+    partial void OnSigningIdentityChanged(string value) => OnPropertyChanged(nameof(SelectionStatus));
+
     [RelayCommand]
     private async Task RunAsync()
     {
@@ -157,7 +165,7 @@ public partial class MainViewModel : ViewModelBase
                     _ => "upgrade-installer"
                 };
                 var command = TaskCatalog.Get(plugin).Prepare(new PluginRequest(plugin, scriptsRoot, runtime,
-                    CurrentVersion.Trim(), NextVersion.Trim(), OssHost.Trim(), SourceDirectory, packageType, PublishAot));
+                    CurrentVersion.Trim(), NextVersion.Trim(), OssHost.Trim(), SourceDirectory, packageType, PublishAot, SigningIdentity.Trim()));
                 IsRunning = true; IsConfirmed = false;
                 _cancellation = new CancellationTokenSource();
                 AppendLog("输出根目录：" + command.OutputRoot);
