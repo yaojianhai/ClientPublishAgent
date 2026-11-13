@@ -4,10 +4,14 @@
 	[string]$RootDirectory,
 	[string]$SourceDirectory = $env:CLIENT_PUBLISH_SOURCE_DIRECTORY,
 	[bool]$DownloadOpenClaw = $true,
-	[bool]$DownloadNodeModules = $true
+	[bool]$DownloadNodeModules = $true,
+	[ValidateSet("true", "false")]
+	[string]$PublishAot = "true"
 )
 
 $ErrorActionPreference = "Stop"
+$publishAotEnabled = $PublishAot -eq "true"
+Write-Host "[WSL] PowerShell 已进入 Linux 发布脚本。"
 . (Join-Path $PSScriptRoot "linux-common.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "publish-root-config.ps1")
 $RuntimeIdentifier = Get-LinuxRuntimeIdentifier -RuntimeIdentifier $RuntimeIdentifier
@@ -24,6 +28,7 @@ if ($isWindowsHost) {
 		RootDirectory = $rootDirectory
 		DownloadOpenClaw = $DownloadOpenClaw
 		DownloadNodeModules = $DownloadNodeModules
+		PublishAot = $publishAotEnabled
 	}
 	if (-not [string]::IsNullOrWhiteSpace($SourceDirectory)) { $wslParameters.SourceDirectory = $SourceDirectory }
 	Invoke-LinuxScriptInWsl -ScriptPath $PSCommandPath -Parameters $wslParameters
@@ -31,6 +36,8 @@ if ($isWindowsHost) {
 }
 
 $hostRuntimeIdentifier = Get-LinuxRuntimeIdentifier
+$env:DOTNET_ROOT = Join-Path $HOME "dotnet"
+$env:PATH = "$env:DOTNET_ROOT$([System.IO.Path]::PathSeparator)$env:PATH"
 $artifactsDirectory = Join-Path $rootDirectory "artifacts"
 $publishDirectory = Join-Path $rootDirectory "StagingRelease"
 $updaterDirectory = Join-Path $publishDirectory "update"
@@ -50,9 +57,11 @@ if (-not (Test-Path -LiteralPath $nodeSourceDirectory -PathType Container)) {
 . (Join-Path $scriptsDirectory "copy-office.ps1")
 
 $requiredCommands = "dotnet", "chmod", "tar", "clang", "objcopy"
+Write-Host "检查 Linux 发布工具..."
 foreach ($command in $requiredCommands) {
 	if (-not (Get-Command $command -CommandType Application -ErrorAction SilentlyContinue)) { throw "未找到 Linux 发布所需命令：$command" }
 }
+Write-Host "检查 Node 与 7zz 可执行文件..."
 Test-LinuxExecutable -Path (Join-Path $nodeSourceDirectory "node") -RuntimeIdentifier $RuntimeIdentifier
 Test-LinuxExecutable -Path (Get-OpenClaw7ZipExecutable -RuntimeIdentifier $RuntimeIdentifier -BundledOnly) -RuntimeIdentifier $RuntimeIdentifier
 Test-LinuxExecutable -Path (Get-OpenClaw7ZipExecutable -RuntimeIdentifier $hostRuntimeIdentifier -BundledOnly) -RuntimeIdentifier $hostRuntimeIdentifier
@@ -65,8 +74,8 @@ function Publish-Project {
 		--self-contained true `
 		--artifacts-path $artifactsDirectory `
 		--output $OutputDirectory `
-		-p:PublishAot=true `
-		-p:PublishTrimmed=true `
+		-p:PublishAot=$publishAotEnabled `
+		-p:PublishTrimmed=$publishAotEnabled `
 		-p:GLibcVersion=2.28 `
 		-p:StripSymbols=true `
 		-p:DebugSymbols=false `
@@ -88,10 +97,13 @@ function Copy-NodeRuntime {
 
 if (Test-Path -LiteralPath $publishDirectory) {
 	if (-not (Test-Path -LiteralPath $publishDirectory -PathType Container)) { throw "暂存发布路径不是目录：$publishDirectory" }
+	Write-Host "清理旧的 Linux 暂存发布目录..."
 	Remove-Item -LiteralPath $publishDirectory -Recurse -Force
 }
 New-Item -ItemType Directory -Path $publishDirectory -Force | Out-Null
+Write-Host "开始复制 Office 依赖..."
 Copy-OfficeDependency -RepositoryDirectory $repoRoot -PublishDirectory $publishDirectory
+Write-Host "开始发布桌面主程序..."
 Publish-Project -ProjectPath $desktopProject -OutputDirectory $publishDirectory
 Install-OpenClawRuntime -PublishDirectory $publishDirectory -AiServiceDirectory $aiServiceDirectory -RuntimeIdentifier $RuntimeIdentifier -DownloadOpenClaw $DownloadOpenClaw -DownloadNodeModules $DownloadNodeModules
 Copy-NodeRuntime
@@ -104,4 +116,4 @@ foreach ($relativeExecutablePath in "WarrenqF1.Desktop", "update/WarrenqF1.Updat
 	Test-LinuxExecutable -Path $executablePath -RuntimeIdentifier $RuntimeIdentifier
 	Set-LinuxExecutablePermission -Path $executablePath
 }
-Write-Host "Linux AOT 暂存发布完成：$publishDirectory"
+Write-Host "Linux $(if ($publishAotEnabled) { 'Native AOT' } else { '非 AOT' }) 暂存发布完成：$publishDirectory"

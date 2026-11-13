@@ -1,8 +1,11 @@
 ﻿param(
-	[string]$SourceDirectory = $env:CLIENT_PUBLISH_SOURCE_DIRECTORY
+	[string]$SourceDirectory = $env:CLIENT_PUBLISH_SOURCE_DIRECTORY,
+	[ValidateSet("true", "false")]
+	[string]$PublishAot = "true"
 )
 
 $ErrorActionPreference = "Stop"
+$publishAotEnabled = $PublishAot -eq "true"
 
 $srcDirectory = if ([string]::IsNullOrWhiteSpace($SourceDirectory)) { Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "src" } else { [System.IO.Path]::GetFullPath($SourceDirectory) }
 $repoRoot = Split-Path -Parent $srcDirectory
@@ -33,7 +36,7 @@ function Publish-Project {
 		--runtime $runtimeIdentifier `
 		--self-contained true `
 		--output $OutputDirectory `
-		-p:PublishAot=true `
+		-p:PublishAot=$publishAotEnabled `
 		-p:DebugSymbols=false `
 		-p:DebugType=None `
 		-p:CopyOutputSymbolsToPublishDirectory=false

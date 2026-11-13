@@ -59,6 +59,7 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty] public partial string NextVersion { get; set; } = "";
     [ObservableProperty] public partial string OssHost { get; set; } = "";
     [ObservableProperty] public partial bool IsConfirmed { get; set; }
+    [ObservableProperty] public partial bool PublishAot { get; set; } = true;
     [ObservableProperty] public partial bool IsRunning { get; set; }
     [ObservableProperty] public partial string Status { get; set; } = "准备就绪";
     [ObservableProperty] public partial string Log { get; set; } = "";
@@ -70,7 +71,7 @@ public partial class MainViewModel : ViewModelBase
     public string SourceDirectory => PackagingPathProvider.SourceDirectory;
 
     public string SelectionStatus => TryGetPluginSelection(out _, out _, out var reason)
-        ? $"将先执行 {SelectedSystem} {SelectedArchitecture} AOT 发布，再生成{SelectedReleaseType}。"
+        ? $"将先执行 {SelectedSystem} {SelectedArchitecture} {(PublishAot ? "Native AOT" : "非 AOT")} 发布，再生成{SelectedReleaseType}。"
         : reason;
 
     public MainViewModel()
@@ -121,6 +122,8 @@ public partial class MainViewModel : ViewModelBase
 
     private void SourceDirectoryChanged(string _) => OnPropertyChanged(nameof(SourceDirectory));
 
+    partial void OnPublishAotChanged(bool value) => OnPropertyChanged(nameof(SelectionStatus));
+
     [RelayCommand]
     private async Task RunAsync()
     {
@@ -154,7 +157,7 @@ public partial class MainViewModel : ViewModelBase
                     _ => "upgrade-installer"
                 };
                 var command = TaskCatalog.Get(plugin).Prepare(new PluginRequest(plugin, scriptsRoot, runtime,
-                    CurrentVersion.Trim(), NextVersion.Trim(), OssHost.Trim(), SourceDirectory, packageType));
+                    CurrentVersion.Trim(), NextVersion.Trim(), OssHost.Trim(), SourceDirectory, packageType, PublishAot));
                 IsRunning = true; IsConfirmed = false;
                 _cancellation = new CancellationTokenSource();
                 AppendLog("输出根目录：" + command.OutputRoot);

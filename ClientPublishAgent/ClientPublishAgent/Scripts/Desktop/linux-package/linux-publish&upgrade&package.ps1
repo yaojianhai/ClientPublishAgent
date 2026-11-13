@@ -12,10 +12,13 @@
 	[ValidatePattern('^[A-Za-z][A-Za-z0-9.-]*$')]
 	[string]$BundleIdentifier = "com.gildata.warrenqf1",
 	[bool]$DownloadOpenClaw = $true,
-	[bool]$DownloadNodeModules = $true
+	[bool]$DownloadNodeModules = $true,
+	[ValidateSet("true", "false")]
+	[string]$PublishAot = "true"
 )
 
 $ErrorActionPreference = "Stop"
+$publishAotEnabled = $PublishAot -eq "true"
 . (Join-Path $PSScriptRoot "linux-common.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "publish-root-config.ps1")
 $RuntimeIdentifier = Get-LinuxRuntimeIdentifier -RuntimeIdentifier $RuntimeIdentifier
@@ -23,7 +26,7 @@ $CurrentVersion = Read-LinuxSemanticVersion -Prompt "请输入当前版本号" -
 $NextVersion = Read-LinuxSemanticVersion -Prompt "请输入下一版本号" -Value $NextVersion
 $publishScript = Join-Path $PSScriptRoot "publish-linux.ps1"
 $upgradeScript = Join-Path $PSScriptRoot "linux-upgrade&package.ps1"
-$publishParameters = @{ DownloadOpenClaw = $DownloadOpenClaw; DownloadNodeModules = $DownloadNodeModules }
+$publishParameters = @{ DownloadOpenClaw = $DownloadOpenClaw; DownloadNodeModules = $DownloadNodeModules; PublishAot = $publishAotEnabled }
 $upgradeParameters = @{ CurrentVersion = $CurrentVersion; NextVersion = $NextVersion }
 $scriptsDirectory = Split-Path -Parent $PSScriptRoot
 $repoRoot = if ([string]::IsNullOrWhiteSpace($SourceDirectory)) { Split-Path -Parent $scriptsDirectory } else { Split-Path -Parent ([System.IO.Path]::GetFullPath($SourceDirectory)) }

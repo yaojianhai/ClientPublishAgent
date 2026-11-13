@@ -17,3 +17,18 @@ function Get-WindowsPublishRootDirectory {
 	if ($rootDirectory -match '^[a-zA-Z]:[\\/]$' -or $rootDirectory -match '^\\\\[^\\]+\\[^\\]+[\\/]?$') { return $rootDirectory.TrimEnd('/') }
 	return $rootDirectory.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
 }
+
+function Invoke-WindowsBatchWithLegacyEncoding {
+	param([Parameter(Mandatory)][string]$CommandLine)
+
+	$originalOutputEncoding = [Console]::OutputEncoding
+	try {
+		[Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding(936)
+		$commandOutput = @(& $env:ComSpec /d /c $CommandLine 2>&1)
+		$exitCode = $LASTEXITCODE
+	} finally {
+		[Console]::OutputEncoding = $originalOutputEncoding
+	}
+	foreach ($line in $commandOutput) { Write-Host $line }
+	return $exitCode
+}

@@ -1124,6 +1124,11 @@ finally
             var injection = "https://host/'; Write-Output 'injected";
             var command = TaskCatalog.Get("windows-package").Prepare(new PluginRequest("windows-package", root, "win-x64", "1.0.0", "1.0.1", injection));
             Check(command.Arguments.Last() == injection && !command.Arguments.Contains("-Command"), "plugin parameters use argument boundaries, not shell interpolation");
+            var aotIndex = command.Arguments.ToList().IndexOf("-PublishAot");
+            Check(aotIndex >= 0 && command.Arguments[aotIndex + 1] == "true", "manual packaging defaults to Native AOT");
+            var nonAotCommand = TaskCatalog.Get("windows-package").Prepare(new PluginRequest("windows-package", root, "win-x64", "1.0.0", "1.0.1", "", PublishAot: false));
+            aotIndex = nonAotCommand.Arguments.ToList().IndexOf("-PublishAot");
+            Check(aotIndex >= 0 && nonAotCommand.Arguments[aotIndex + 1] == "false", "manual packaging forwards the non-AOT selection");
             var linuxScripts = Path.Combine(root, "linux-package"); Directory.CreateDirectory(linuxScripts);
             File.WriteAllText(Path.Combine(linuxScripts, "linux-publish&upgrade&package.ps1"), "exit 0");
             var shellDirectory = Path.Combine(root, "test-pwsh"); Directory.CreateDirectory(shellDirectory);
@@ -1134,6 +1139,11 @@ finally
                 Environment.SetEnvironmentVariable("PATH", shellDirectory + Path.PathSeparator + Environment.GetFolderPath(Environment.SpecialFolder.System));
                 var linuxCommand = TaskCatalog.Get("linux-package").Prepare(new PluginRequest("linux-package", root, "linux-x64", "1.0.0", "1.0.1", ""));
                 Check(linuxCommand.Executable == shellPath, "Linux plugin resolves PowerShell 7 from PATH");
+                var linuxAotIndex = linuxCommand.Arguments.ToList().IndexOf("-PublishAot");
+                Check(linuxAotIndex >= 0 && linuxCommand.Arguments[linuxAotIndex + 1] == "true", "Linux manual package defaults to AOT");
+                var linuxNonAot = TaskCatalog.Get("linux-package").Prepare(new PluginRequest("linux-package", root, "linux-x64", "1.0.0", "1.0.1", "", PublishAot: false));
+                linuxAotIndex = linuxNonAot.Arguments.ToList().IndexOf("-PublishAot");
+                Check(linuxAotIndex >= 0 && linuxNonAot.Arguments[linuxAotIndex + 1] == "false", "Linux manual package forwards non-AOT selection");
                 Environment.SetEnvironmentVariable("PATH", Environment.GetFolderPath(Environment.SpecialFolder.System));
                 var installed = new[] { Environment.SpecialFolder.ProgramFiles, Environment.SpecialFolder.ProgramFilesX86 }
                     .Select(Environment.GetFolderPath).Where(p => !string.IsNullOrEmpty(p))

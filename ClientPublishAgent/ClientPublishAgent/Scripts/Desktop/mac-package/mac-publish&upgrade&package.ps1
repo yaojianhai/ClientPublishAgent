@@ -10,10 +10,13 @@
 	[string]$SigningIdentity,
 	[string]$BundleIdentifier = "com.gildata.warrenqf1",
 	[ValidateSet("upgrade", "installer", "upgrade-installer")]
-	[string]$PackageType = "upgrade-installer"
+	[string]$PackageType = "upgrade-installer",
+	[ValidateSet("true", "false")]
+	[string]$PublishAot = "true"
 )
 
 $ErrorActionPreference = "Stop"
+$publishAotEnabled = $PublishAot -eq "true"
 $backupScript = Join-Path (Split-Path -Parent $PSScriptRoot) "backup-staging-release.ps1"
 . $backupScript
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "publish-root-config.ps1")
@@ -34,6 +37,7 @@ $scriptsDirectory = Split-Path -Parent $PSScriptRoot
 $repoRoot = if ([string]::IsNullOrWhiteSpace($SourceDirectory)) { Split-Path -Parent $scriptsDirectory } else { Split-Path -Parent ([System.IO.Path]::GetFullPath($SourceDirectory)) }
 $rootDirectory = if ([string]::IsNullOrWhiteSpace($runtimeIdentifierForRoot)) { throw "无法解析 macOS 运行时标识，无法确定发布根目录。" } else { Resolve-DesktopPublishRootDirectory -RuntimeIdentifier $runtimeIdentifierForRoot -RepositoryRoot $repoRoot -RootDirectory $RootDirectory }
 $publishParameters = @{ RootDirectory = $rootDirectory }
+$publishParameters.PublishAot = $publishAotEnabled
 if (-not [string]::IsNullOrWhiteSpace($SourceDirectory)) { $publishParameters.SourceDirectory = $SourceDirectory }
 $publishParameters.RootDirectory = $rootDirectory
 $upgradeParameters.RootDirectory = $rootDirectory

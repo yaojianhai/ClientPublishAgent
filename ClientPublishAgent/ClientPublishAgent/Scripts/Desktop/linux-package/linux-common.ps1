@@ -186,12 +186,13 @@ function Invoke-LinuxScriptInWsl {
 	}
 	$encodedCommand = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($invocation.ToString()))
 	$arguments = @("-NoLogo", "-NoProfile", "-OutputFormat", "Text", "-EncodedCommand", $encodedCommand)
-	$wslLaunchArguments = @("-d", "Debian", "--exec")
+	$bashCommand = 'echo "[WSL] Loading ~/.bashrc"; source ~/.bashrc && export ARTIFACTORY_API_TOKEN && echo "[WSL] Starting pwsh" && exec pwsh "$@"'
+	$bashArguments = @("--")
 	if ($values.Contains("SourceDirectory") -and -not [string]::IsNullOrWhiteSpace([string]$values.SourceDirectory)) {
-		$wslLaunchArguments += @("env", "CLIENT_PUBLISH_SOURCE_DIRECTORY=$([string]$values.SourceDirectory)", "pwsh")
-	} else {
-		$wslLaunchArguments += "pwsh"
+		$bashCommand = 'echo "[WSL] Loading ~/.bashrc"; source ~/.bashrc && export ARTIFACTORY_API_TOKEN && echo "[WSL] Starting pwsh" && export CLIENT_PUBLISH_SOURCE_DIRECTORY="$1" && shift && exec pwsh "$@"'
+		$bashArguments += [string]$values.SourceDirectory
 	}
+	$wslLaunchArguments = @("-d", "Debian", "--exec", "bash", "-c", $bashCommand) + $bashArguments
 	$wslResult = Invoke-WslProcess -Arguments ($wslLaunchArguments + $arguments)
 	if ($wslResult.ExitCode -ne 0) { throw "WSL Debian 脚本执行失败：$ScriptPath，退出代码：$($wslResult.ExitCode)" }
 }

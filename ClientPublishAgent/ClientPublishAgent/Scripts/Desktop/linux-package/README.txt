@@ -10,8 +10,10 @@ Linux deb 应用识别与联网策略
 Linux 发布脚本按宿主系统执行
 ----------------------------
 - Windows：publish-linux.ps1 将完整 Linux 发布流程转交给 WSL Debian 执行；Windows 负责传递脚本参数和路径。
+- WSL 启动时先 source ~/.bashrc，再启动 PowerShell 7，以便发布脚本继承用户配置的环境变量。
 - Linux：在当前系统原生运行 dotnet、Clang 和 Linux 发布工具，不再启动 WSL。
 - linux-publish&upgrade&package.ps1 等组合入口沿用此规则：Windows 发布交给 WSL；后续打包/升级入口也会在 Windows 下各自交给 WSL，Linux 则原生执行。
+- 手工打包界面的 Native AOT 选项默认开启；关闭后发布脚本传递 PublishAot=false，并同时关闭 Linux trimming。脚本参数可用 -PublishAot true/false 显式设置。
 - WSL Debian 需安装 PowerShell 7、.NET SDK、Clang/LLVM、objcopy、tar；制 deb 还需 dpkg-deb、readelf、find、chmod、ln。
 - 源码目录、根目录或输出目录可传 Windows 绝对路径；Windows 分支会转换成 WSL 路径。Linux 分支直接使用 Linux 路径。
 

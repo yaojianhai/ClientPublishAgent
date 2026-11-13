@@ -2,10 +2,13 @@
 	[ValidateSet("osx-arm64", "osx-x64")]
 	[string]$RuntimeIdentifier,
 	[string]$RootDirectory,
-	[string]$SourceDirectory = $env:CLIENT_PUBLISH_SOURCE_DIRECTORY
+	[string]$SourceDirectory = $env:CLIENT_PUBLISH_SOURCE_DIRECTORY,
+	[ValidateSet("true", "false")]
+	[string]$PublishAot = "true"
 )
 
 $ErrorActionPreference = "Stop"
+$publishAotEnabled = $PublishAot -eq "true"
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "publish-root-config.ps1")
 if ([string]::IsNullOrWhiteSpace($RuntimeIdentifier)) {
 	$machineArchitecture = (& uname -m).Trim()
@@ -45,7 +48,7 @@ function Publish-Project {
 		--runtime $RuntimeIdentifier `
 		--self-contained true `
 		--output $OutputDirectory `
-		-p:PublishAot=true `
+		-p:PublishAot=$publishAotEnabled `
 		-p:DebugSymbols=false `
 		-p:DebugType=None `
 		-p:CopyOutputSymbolsToPublishDirectory=false

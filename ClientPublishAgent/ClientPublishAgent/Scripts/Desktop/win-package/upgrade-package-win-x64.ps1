@@ -23,6 +23,7 @@ if (-not (Test-Path -LiteralPath $manifestFile -PathType Leaf)) { throw "未找�
 $manifest = Get-Content -LiteralPath $manifestFile -Raw | ConvertFrom-Json -ErrorAction Stop
 $clientVersion = ([string]$manifest.clientVersion).Trim()
 if ([string]::IsNullOrWhiteSpace($clientVersion)) { throw "升级发布清单未包含有效的 clientVersion：$manifestFile" }
-& $env:ComSpec /d /c "call `"$installerScript`" `"$stagingDirectory`" `"$clientVersion`""
-if ($LASTEXITCODE -ne 0) { throw "Windows 安装包打包失败，退出代码：$LASTEXITCODE" }
+$installerCommand = "call `"$installerScript`" `"$stagingDirectory`" `"$clientVersion`""
+$installerExitCode = Invoke-WindowsBatchWithLegacyEncoding -CommandLine $installerCommand
+if ($installerExitCode -ne 0) { throw "Windows 安装包打包失败，退出代码：$installerExitCode" }
 Backup-StagingRelease -StagingDirectory $stagingDirectory -Version $clientVersion

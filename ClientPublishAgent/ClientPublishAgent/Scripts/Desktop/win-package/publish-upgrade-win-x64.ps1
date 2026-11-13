@@ -1,10 +1,13 @@
 ﻿param(
 	[string]$CurrentVersion,
 	[string]$NextVersion,
-	[string]$OssHost
+	[string]$OssHost,
+	[ValidateSet("true", "false")]
+	[string]$PublishAot = "true"
 )
 
 $ErrorActionPreference = "Stop"
+$publishAotEnabled = $PublishAot -eq "true"
 $configScript = Join-Path $PSScriptRoot "publish-config.ps1"
 . $configScript
 $backupScript = Join-Path (Split-Path -Parent $PSScriptRoot) "backup-staging-release.ps1"
@@ -22,7 +25,7 @@ $upgradeParameters = @{
 if (-not [string]::IsNullOrWhiteSpace($OssHost)) {
 	$upgradeParameters.OssHost = $OssHost
 }
-& $publishScript
+& $publishScript -PublishAot $publishAotEnabled
 if ($LASTEXITCODE -ne 0) {
 	throw "Windows 发布失败，退出代码：$LASTEXITCODE"
 }

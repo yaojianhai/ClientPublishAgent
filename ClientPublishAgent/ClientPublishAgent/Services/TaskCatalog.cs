@@ -7,7 +7,7 @@ using System.Text.RegularExpressions;
 namespace ClientPublishAgent.Services;
 
 public enum NativeHost { Windows, Linux, MacOS }
-public sealed record PluginRequest(string Task, string ScriptsRoot, string RuntimeIdentifier, string CurrentVersion, string NextVersion, string OssHost, string SourceDirectory = "", string PackageType = "upgrade-installer");
+public sealed record PluginRequest(string Task, string ScriptsRoot, string RuntimeIdentifier, string CurrentVersion, string NextVersion, string OssHost, string SourceDirectory = "", string PackageType = "upgrade-installer", bool PublishAot = true);
 public sealed record PluginCommand(string Executable, IReadOnlyList<string> Arguments, string Directory, string OutputRoot,
     string? ScriptPath = null, string? SourceDirectory = null);
 public interface ITaskPlugin
@@ -73,6 +73,8 @@ public static class TaskCatalog
             args.AddRange(["-File", path, "-CurrentVersion", request.CurrentVersion, "-NextVersion", request.NextVersion]);
             if (id != "marketserver" && !string.IsNullOrWhiteSpace(sourceDirectory)) args.AddRange(["-SourceDirectory", sourceDirectory]);
             args.AddRange(["-RuntimeIdentifier", request.RuntimeIdentifier, "-PackageType", packageType]);
+            if (id is "windows-package" or "linux-package" or "macos-package")
+                args.AddRange(["-PublishAot", request.PublishAot.ToString().ToLowerInvariant()]);
             if (!string.IsNullOrEmpty(request.OssHost)) args.AddRange(["-OssHost", request.OssHost]);
             var repositoryRoot = Directory.GetParent(request.ScriptsRoot)?.Parent?.FullName ?? request.ScriptsRoot;
             var root = Path.Combine(repositoryRoot, "publish", request.RuntimeIdentifier);
