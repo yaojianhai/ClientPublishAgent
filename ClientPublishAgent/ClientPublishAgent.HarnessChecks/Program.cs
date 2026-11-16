@@ -3,6 +3,8 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using ClientPublishAgent.Services;
 using ClientPublishAgent.Services.Harness;
 using ClientPublishAgent.ViewModels;
@@ -13,6 +15,8 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Themes.Fluent;
 using Avalonia.Threading;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
 
 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
 var ct = timeout.Token;
@@ -40,6 +44,13 @@ try
         await CheckPackagingUiAsync(ct);
         return;
     }
+    if (args.Contains("--attribution-json", StringComparer.Ordinal))
+    {
+        CheckRequestSourceAttributionSerialization();
+        await CheckSessionSerializationWithoutReflectionAsync(model, root, keyName, ct);
+        Console.WriteLine("Request source attribution JSON checks passed.");
+        return;
+    }
     if (args.Contains("--interactive", StringComparer.Ordinal))
     {
         await CheckInteractiveTasksAsync(model, root, keyName, ct);
@@ -49,6 +60,12 @@ try
     if (args.Contains("--chat-ui", StringComparer.Ordinal))
     {
         await CheckChatInteractionAsync(model, root, keyName, ct);
+        model.AssertHealthy();
+        return;
+    }
+    if (args.Contains("--compaction", StringComparer.Ordinal))
+    {
+        await CheckCompactionPersistenceAsync(model, output, root, keyName, ct);
         model.AssertHealthy();
         return;
     }
@@ -178,18 +195,25 @@ finally
             {
                 AppBuilder.Configure<Application>().UsePlatformDetect().SetupWithoutStarting();
                 Application.Current!.Styles.Add(new FluentTheme());
-                Dispatcher.UIThread.Post(() =>
+                Dispatcher.UIThread.Post(async () =>
                 {
                     MainWindow? window = null;
                     try
                     {
                         window = new MainWindow { ShowInTaskbar = false };
-                        var tabs = (TabControl)window.Content!;
+                        Check(window.Icon is not null, "main window loads the cross-platform native PNG window icon");
+                        var logo = window.FindControl<Avalonia.Svg.Skia.Svg>("ApplicationLogo");
+                        Check(logo is not null && logo.Width == 36 && logo.Height == 36 && logo.Path == "/Assets/ai.svg",
+                            "main window displays the ai.svg title logo at 36 by 36");
+                        var tabs = window.FindControl<TabControl>("MainTabs")!;
                         var tab = tabs.Items.OfType<TabItem>().Single(item => Equals(item.Header, "打包目录配置"));
                         Check(tab.Content is PackagingPathsView, "main window uses shared packaging paths view");
                         tabs.SelectedItem = tab;
                         window.Show();
+                        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
                         window.UpdateLayout();
+                        Check(logo!.Bounds.Width == 36 && logo.Bounds.Height == 36,
+                            $"ai.svg title logo renders at 36 by 36 device-independent pixels (actual {logo.Bounds.Width}x{logo.Bounds.Height})");
                         var view = (PackagingPathsView)tab.Content!;
                         Check(view.FindControl<StackPanel>("WindowsOutputSection")!.IsVisible, "Windows output directory is visible on Windows");
                         Check(!view.FindControl<StackPanel>("LinuxOutputSection")!.IsVisible, "Linux output directory is hidden on Windows");
@@ -344,29 +368,85 @@ finally
                     {
                         var store = new PlatformStore(Path.Combine(root, "chat-ui-cache"));
                         var profile = new AgentProfile { Name = "Chat checks", Endpoint = model.Endpoint, Model = "fake-model", KeyEnvironmentVariable = keyName,
-                            WorkspaceRoot = root, Files = true };
+                            WorkspaceRoot = root, Files = true, Terminal = true };
                         store.SaveProfiles([profile]);
                         ui = new AgentWorkspaceViewModel(store);
                         var view = new AgentView(ui);
                         window = new Window { Width = 980, Height = 720, ShowInTaskbar = false, Content = view };
                         window.Show();
+                        window.UpdateLayout();
+                        Check(view.FindControl<StackPanel>("SidebarContent")!.Margin.Right >= 16,
+                            "sidebar content has clearance from the vertical scrollbar");
                         async Task LayoutAsync()
                         {
                             window.UpdateLayout();
                             await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
                             window.UpdateLayout();
                         }
-                        await ui.ConnectCommand.ExecuteAsync(null);
+                        await LayoutAsync();
+                        var details = view.FindControl<Border>("DetailsPanel")!;
+                        var toggle = view.FindControl<Avalonia.Controls.Primitives.ToggleButton>("DetailsToggle")!;
+                        var sidebarSplitter = view.FindControl<GridSplitter>("SidebarSplitter")!;
+                        var detailsSplitter = view.FindControl<GridSplitter>("DetailsSplitter")!;
+                        var initialDetailsWidth = details.Bounds.Width;
+                        Check(details.IsVisible && toggle.IsChecked == true && initialDetailsWidth >= 300,
+                            "task details respect the minimum width at startup");
+                        window.Width = 1280;
+                        await LayoutAsync();
+                        Check(details.Bounds.Width > initialDetailsWidth + 20,
+                            "task details expand when the workspace window becomes wider");
+                        window.Width = 980;
+                        await LayoutAsync();
+                        Check(sidebarSplitter.ResizeDirection == GridResizeDirection.Columns && sidebarSplitter.ResizeBehavior == GridResizeBehavior.PreviousAndNext &&
+                            detailsSplitter.ResizeDirection == GridResizeDirection.Columns && detailsSplitter.ResizeBehavior == GridResizeBehavior.PreviousAndNext &&
+                            detailsSplitter.IsVisible, "both side panels expose column-resizing splitters");
+                        toggle.IsChecked = false;
+                        await LayoutAsync();
+                        Check(!details.IsVisible && !detailsSplitter.IsVisible && !ui.IsDetailsVisible && view.FindControl<ScrollViewer>("ChatScroll")!.Bounds.Width > 500,
+                            "hiding task details expands the conversation");
+                        toggle.IsChecked = true;
+                        await LayoutAsync();
+                        Check(details.IsVisible && ui.IsDetailsVisible, "task details reopen from the toolbar");
+                        Check(view.FindControl<Expander>("AgentSettings") is not null && view.FindControl<Expander>("AgentCapabilities") is not null,
+                            "agent configuration and capability controls remain accessible");
+                        await ui.InitializeOnStartupAsync();
+                        Check(ui.IsConnected && ui.CanSend && ui.CanType && ui.CanEditSettings && ui.Sessions.Count == 0,
+                            "startup initializes an editable conversation without creating empty history");
+                        Check(ui.ModeText == "自动执行", "startup uses execute mode (shown as " + ui.ModeText + ")");
+                        ui.Model = "startup-selected-model";
+                        Check(view.FindControl<Button>("NewConversationButton")!.IsEnabled,
+                            "new-conversation button remains clickable in an untouched workspace");
+                        await ui.NewConversationCommand.ExecuteAsync(null);
+                        Check(ui.IsConnected && ui.ChatItems.Count == 0 && ui.Sessions.Count == 0,
+                            "new-conversation command leaves an untouched workspace unchanged");
                         ui.Input = "hello chat";
                         model.EnqueueText("hello ", "stream");
                         await ui.SendCommand.ExecuteAsync(null);
                         Check(ui.ChatItems.Count(c => c.Role == "user") == 1 && ui.ChatItems.Single(c => c.Role == "assistant").Text == "hello stream",
                             "stream updates a single assistant message");
+                        Check(store.Search("", profile.Id).Single().Name == "hello chat",
+                            "first prompt becomes the persisted history title");
+                        Check(ui.Sessions.Single().Binding == ui.Profiles.Single().Binding,
+                            "profile edits in the startup blank conversation apply before its first request");
+                        Check(ui.CanEditSettings, "agent settings remain editable after the first interaction");
+                        ui.Model = "post-interaction-model";
+                        ui.SaveProfileCommand.Execute(null);
+                        var updatedBinding = ui.Profiles.Single().Binding;
+                        Check(ui.CanEditSettings && ui.Status.Contains("新会话将使用最新设置"),
+                            "saved profile changes remain available and clearly apply to new sessions");
+                        Check(view.FindControl<Button>("NewConversationButton")!.IsEnabled,
+                            "new-conversation button is enabled after the first interaction");
+                        await ui.NewConversationCommand.ExecuteAsync(null);
+                        Check(ui.IsConnected && ui.ChatItems.Count == 0 && ui.Sessions.Count == 1 && ui.CanSend &&
+                            !ui.CanStartNewConversation,
+                            "new conversation preserves prior history and opens a blank unsaved workspace");
 
                         model.EnqueueTools(("write_workspace_file", new { path = "chat-once.txt", content = "once" }),
                             ("write_workspace_file", new { path = "chat-denied.txt", content = "denied" }));
                         ui.Input = "two tools";
                         await ui.SendCommand.ExecuteAsync(null);
+                        Check(ui.Sessions.Single(s => s.Name == "two tools").Binding == updatedBinding,
+                            "new conversations use profile changes saved after prior interaction");
                         var cards = ui.ChatItems.Where(c => c.IsPendingApproval).ToArray();
                         var once = cards.Single(c => c.Text.Contains("chat-once.txt"));
                         var denied = cards.Single(c => c.Text.Contains("chat-denied.txt"));
@@ -410,9 +490,10 @@ finally
                         Check(scroll.Extent.Height - scroll.Viewport.Height - scroll.Offset.Y <= 32, "latest-message button resumes following");
 
                         var input = view.FindControl<TextBox>("ChatInput")!;
+                        var requestsBeforeNewline = model.Requests.Count;
                         var shiftEnter = new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = Key.Enter, KeyModifiers = KeyModifiers.Shift };
                         input.RaiseEvent(shiftEnter);
-                        Check(!shiftEnter.Handled, "Shift Enter remains available for multiline input");
+                        Check(input.Text?.Contains('\n') == true && model.Requests.Count == requestsBeforeNewline, "Shift Enter inserts a newline without sending");
                         ui.Input = "keyboard-send";
                         model.EnqueueText("keyboard reply");
                         input.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = Key.Enter });
@@ -423,10 +504,10 @@ finally
                         model.EnqueueText("local-", "test-key");
                         await ui.SendCommand.ExecuteAsync(null);
                         Check(!ui.ChatItems.Last().Text.Contains("local-test-key"), "message rendering redacts credentials spanning stream chunks");
-                        var saved = store.Load(ui.Sessions.Single().Id);
+                        var saved = store.Load(ui.SelectedSession!.Id);
                         Check(saved.Messages is not null && !JsonSerializer.Serialize(saved.Messages).Contains("local-test-key"), "structured history is persisted and redacted");
                         await ui.DisconnectCommand.ExecuteAsync(null);
-                        ui.SelectedSession = ui.Sessions.Single();
+                        ui.SelectedSession = ui.Sessions.Single(s => s.Id == saved.Id);
                         await ui.RestoreSessionCommand.ExecuteAsync(null);
                         Check(ui.ChatItems.Count == saved.Messages!.Count && !ui.ChatItems.Any(c => c.IsPendingApproval) && !ui.SessionApprovalEnabled,
                             "message history restores without actionable approval cards or session grants");
@@ -436,6 +517,40 @@ finally
                         await ui.SendCommand.ExecuteAsync(null);
                         ui.CancelCommand.Execute(null);
                         Check(!ui.ChatItems.Any(c => c.IsPendingApproval) && !File.Exists(Path.Combine(root, "chat-cancelled.txt")), "cancellation collapses pending cards without execution");
+                        Check(ui.CanSend, "send remains enabled after stopping a pending tool request");
+                        model.EnqueueText("continued after stop");
+                        ui.Input = "continue after stop";
+                        await ui.SendCommand.ExecuteAsync(null);
+                        Check(ui.CanSend && ui.ChatItems.Last(c => c.Role == "assistant").Text.Contains("continued after stop"),
+                            "a stopped conversation accepts and completes the next message");
+
+                        var terminalStarted = Path.Combine(root, "chat-terminal-started");
+                        var terminalFinished = Path.Combine(root, "chat-terminal-finished");
+                        model.EnqueueTool("run_terminal", new { command = $"Set-Content '{terminalStarted}' 'started'; Start-Sleep -Seconds 30; Set-Content '{terminalFinished}' 'finished'" });
+                        ui.Input = "start a cancellable terminal task";
+                        await ui.SendCommand.ExecuteAsync(null);
+                        var terminalCard = ui.ChatItems.Single(c => c.IsPendingApproval);
+                        var terminalRun = ui.AllowOnceCommand.ExecuteAsync(terminalCard);
+                        await WaitForFileAsync(terminalStarted, stop.Token);
+                        Check(ui.IsBusy && !ui.CanSend, "send is disabled while the approved task is running");
+                        ui.CancelCommand.Execute(null);
+                        await terminalRun;
+                        Check(!ui.IsBusy && ui.CanSend && !File.Exists(terminalFinished),
+                            "send is re-enabled after stopping a running task");
+                        model.EnqueueText("continued after active stop");
+                        ui.Input = "continue after active stop";
+                        await ui.SendCommand.ExecuteAsync(null);
+                        Check(ui.CanSend && ui.ChatItems.Last(c => c.Role == "assistant").Text.Contains("continued after active stop"),
+                            "an actively stopped conversation accepts the next message");
+                        var activeSessionId = ui.SelectedSession?.Id ?? throw new InvalidOperationException("Active history was not selected.");
+                        foreach (var oldSession in store.Search("", profile.Id).Where(s => s.Id != activeSessionId))
+                            store.Delete(oldSession.Id);
+                        ui.RefreshSessionsCommand.Execute(null);
+                        Check(ui.Sessions.Count == 1 && ui.Sessions[0].Id == activeSessionId,
+                            "the current conversation is the final history entry");
+                        Check(await ui.DeleteSessionAsync(ui.Sessions[0]) && ui.IsConnected && ui.CanSend &&
+                            ui.ChatItems.Count == 0 && ui.Sessions.Count == 0,
+                            "deleting the final active history saves and removes it, then opens a blank conversation");
                         Check(await ui.CloseAsync(), "chat window closes and persists safely");
                         ui = null;
                         completion.TrySetResult();
@@ -609,7 +724,7 @@ finally
         await File.WriteAllTextAsync(Path.Combine(root, "outside.txt"), "outside-resource-secret", ct);
         var profile = new AgentProfile { Name = "Automatic", Endpoint = model.Endpoint, Model = "fake-model", KeyEnvironmentVariable = keyName,
             WorkspaceRoot = root, MemoryDirectory = "auto-memory", SkillsDirectory = "auto-skills" };
-        HarnessSettings Settings(AgentProfile p) => new(p.Endpoint, p.Model, p.KeyEnvironmentVariable, "", p);
+        HarnessSettings Settings(AgentProfile p) => new(p.Endpoint, p.Model, p.KeyEnvironmentVariable, p.ScriptsDirectory, p);
         using (var disabled = new HarnessWorkspace(Settings(profile), output.Enqueue))
         {
             await disabled.InitializeAsync(ct);
@@ -899,7 +1014,7 @@ finally
             approval = await Ask("cancel");
             using var cancel = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cancel.CancelAfter(TimeSpan.FromMilliseconds(250));
-            await ExpectCancellationAsync(online.DecideAsync(approval.Id, true, cancellationToken: cancel.Token), "search cancellation");
+            await ExpectCancellationAsync(online.DecideAsync(approval.Id, true, cancellationToken: cancel.Token), "cancel while waiting for gate");
         }
         using (var restored = new HarnessWorkspace(Settings(searchProfile), output.Enqueue))
         {
@@ -951,11 +1066,10 @@ finally
             Check(ui.Sessions.Single().Id == healthy.Id && ui.HistoryWarning.Contains(Path.GetFileName(brokenPath)) &&
                 ui.Status.Contains("警告"), "startup displays history warning without losing healthy sessions");
             ui.SelectedProfile = ui.Profiles.Single(p => p.Id == second.Id);
-            ui.Search = "no-matches";
             ui.DeleteProfileCommand.Execute(null);
             Check(ui.Profiles.Count == 2 && store.LoadProfiles().Count == 2 &&
                 ui.Status.Contains("无法确认归属") && ui.Status.Contains(Path.GetFileName(brokenPath)),
-                "unattributable history blocks agent deletion even across profile/search filters");
+                "unattributable history blocks agent deletion regardless of the selected profile");
         }
         File.Delete(brokenPath);
         var invalidName = Path.Combine(store.Root, "invalid.session.json");
@@ -1012,6 +1126,63 @@ finally
         Check(File.ReadAllText(profilesPath) == "{broken-profiles", "failed initialization never overwrites damaged cache");
     }
 
+    static async Task CheckCompactionPersistenceAsync(FakeModel model, ConcurrentQueue<string> output, string root, string keyName, CancellationToken ct)
+    {
+        CheckRequestSourceAttributionSerialization();
+        var profile = new AgentProfile { Name = "Compaction checks", Endpoint = model.Endpoint, Model = "fake-model",
+            KeyEnvironmentVariable = keyName, WorkspaceRoot = root, ScriptsDirectory = root,
+            Compaction = true, ContextTokens = 8192, OutputTokens = 1024 };
+        var settings = new HarnessSettings(profile.Endpoint, profile.Model, profile.KeyEnvironmentVariable, profile.ScriptsDirectory, profile);
+        using var workspace = new HarnessWorkspace(settings, output.Enqueue);
+        await workspace.InitializeAsync(ct);
+        model.EnqueueText("first compaction answer");
+        await workspace.SendAsync("first compaction question", cancellationToken: ct);
+        var session = new StoredConversation { ProfileId = profile.Id, Binding = profile.Binding,
+            ProfileSnapshot = profile, Session = await workspace.SerializeAsync(ct) };
+
+        using var restored = new HarnessWorkspace(settings, output.Enqueue);
+        await restored.RestoreAsync(session, profile, ct);
+        model.EnqueueText("restored compaction answer");
+        var result = await restored.SendAsync("continue after compaction restore", cancellationToken: ct);
+        var state = await restored.SerializeAsync(ct);
+        Check(result.Text.Contains("restored compaction answer") &&
+            state.GetProperty("stateBag").GetProperty("AgentModeProvider").GetProperty("currentMode").GetString() == "execute",
+            "compaction session serializes, restores, and continues in execute mode");
+        Console.WriteLine("Compaction session persistence checks passed.");
+    }
+
+    static void CheckRequestSourceAttributionSerialization()
+    {
+        var options = new JsonSerializerOptions(AIJsonUtilities.DefaultOptions);
+        options.Converters.Add(new RequestAttributionJsonConverter());
+        options.TypeInfoResolverChain.Add(new RequestAttributionTypeInfoResolver());
+        var message = new ChatMessage(ChatRole.Assistant, "answer")
+        {
+            AdditionalProperties = new AdditionalPropertiesDictionary
+            {
+                ["source"] = new AgentRequestMessageSourceAttribution(AgentRequestMessageSourceType.ChatHistory, "history")
+            }
+        };
+
+        var json = JsonSerializer.SerializeToElement(message, options);
+        var attribution = json.GetProperty("additionalProperties").GetProperty("source");
+        Check(attribution.GetProperty("sourceId").GetString() == "history" &&
+            attribution.TryGetProperty("sourceType", out var sourceType) && sourceType.ValueKind != JsonValueKind.Null,
+            "request source attribution in message additional properties serializes");
+        var restored = JsonSerializer.Deserialize<ChatMessage>(json, options);
+        Check(restored?.AdditionalProperties?.ContainsKey("source") == true,
+            "request source attribution message additional properties deserializes");
+    }
+
+    static async Task CheckSessionSerializationWithoutReflectionAsync(FakeModel model, string root, string keyName, CancellationToken ct)
+    {
+        using var workspace = new HarnessWorkspace(new HarnessSettings(model.Endpoint, "fake-model", keyName, root), _ => { });
+        await workspace.InitializeAsync(ct);
+        var state = await workspace.SerializeAsync(ct);
+        Check(state.GetProperty("stateBag").GetProperty("AgentModeProvider")
+            .GetProperty("currentMode").GetString() == "execute", "session serialization works with reflection disabled");
+    }
+
     static async Task CheckPlatformAsync(FakeModel model, ConcurrentQueue<string> output, string root, string keyName, CancellationToken ct)
     {
         var store = new PlatformStore(Path.Combine(root, "platform-cache"));
@@ -1039,6 +1210,9 @@ finally
         using (var first = new HarnessWorkspace(Settings(profile), output.Enqueue))
         {
             await first.InitializeAsync(ct);
+            var initialState = await first.SerializeAsync(ct);
+            Check(initialState.GetProperty("stateBag").GetProperty("AgentModeProvider")
+                .GetProperty("currentMode").GetString() == "execute", "new Harness sessions default to execute mode");
             await first.SetModeAsync("execute", ct);
             model.EnqueueText("persistent answer");
             await first.SendAsync("remember platypus-42", cancellationToken: ct);
@@ -1255,8 +1429,15 @@ finally
         uiStore.SaveProfiles([profile], profile.Id);
         var ui = new AgentWorkspaceViewModel(uiStore);
         Check(ui.Endpoint == profile.Endpoint && ui.SelectedProfile?.Id == profile.Id, "startup loads last configured profile without re-entry");
-        await ui.ConnectCommand.ExecuteAsync(null);
-        Check(ui.IsConnected && ui.Sessions.Count == 1, "UI creates persisted platform conversation");
+        await ui.InitializeOnStartupAsync();
+        Check(ui.CanSend && ui.CanType && ui.CanEditSettings && ui.IsConnected && ui.Sessions.Count == 0,
+            "startup initializes an editable conversation without creating an empty history item");
+        Check(ui.ModeText == "自动执行", "startup uses execute mode (shown as " + ui.ModeText + ")");
+        ui.Input = "first UI question";
+        model.EnqueueText("first UI answer");
+        await ui.SendCommand.ExecuteAsync(null);
+        Check(ui.IsConnected && ui.Sessions.Count == 1 && ui.Sessions.Single().Name == "first UI question",
+            "first UI question creates the titled persistent conversation");
         await ui.DisconnectCommand.ExecuteAsync(null);
         Check(!ui.IsConnected && ui.Sessions.Count == 1, "UI disconnect retains history");
         ui.SelectedSession = ui.Sessions.Single();
@@ -1394,8 +1575,29 @@ static async Task CheckHarnessAsync(HarnessWorkspace workspace, FakeModel model,
         workspace.Cancel();
         try { await running; } catch (OperationCanceledException) { }
     }
+    model.EnqueueText("continued after stopped task");
+    var continued = await workspace.SendAsync("continue after stopping task", cancellationToken: ct);
+    Check(continued.Text.Contains("continued after stopped task") && workspace.State == HarnessState.Ready &&
+        !File.Exists(Path.Combine(root, "cancel-finished")), "cancelled task session accepts a follow-up message without resuming the cancelled task");
     Check(!model.Requests.Any(s => s.Contains("local-only-secret") || s.Contains("failure-output")), "no script logs sent in later requests");
     Console.WriteLine("PASS: Harness approvals, isolation, failures and cancellation");
+}
+
+static Task WriteScriptAsync(string root, string body, CancellationToken ct) =>
+    File.WriteAllTextAsync(Path.Combine(root, "upgrade-win-x64.ps1"), "param($CurrentVersion,$NextVersion,$OssHost)\n" + body, ct);
+
+static async Task WaitForFileAsync(string path, CancellationToken ct)
+{
+    using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+    deadline.CancelAfter(TimeSpan.FromSeconds(15));
+    while (!File.Exists(path)) await Task.Delay(50, deadline.Token);
+}
+
+static async Task ExpectCancellationAsync(Task task, string name)
+{
+    try { await task; }
+    catch (OperationCanceledException) { return; }
+    throw new InvalidOperationException("FAIL: " + name);
 }
 
 static async Task CheckGateAsync(string root, CancellationToken ct)
@@ -1437,23 +1639,6 @@ static async Task CheckGateAsync(string root, CancellationToken ct)
         }
     }
     Console.WriteLine("PASS: global PowerShell gate and waiting cancellation");
-}
-
-static Task WriteScriptAsync(string root, string body, CancellationToken ct) =>
-    File.WriteAllTextAsync(Path.Combine(root, "upgrade-win-x64.ps1"), "param($CurrentVersion,$NextVersion,$OssHost)\n" + body, ct);
-
-static async Task WaitForFileAsync(string path, CancellationToken ct)
-{
-    using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-    deadline.CancelAfter(TimeSpan.FromSeconds(15));
-    while (!File.Exists(path)) await Task.Delay(50, deadline.Token);
-}
-
-static async Task ExpectCancellationAsync(Task task, string name)
-{
-    try { await task; }
-    catch (OperationCanceledException) { return; }
-    throw new InvalidOperationException("FAIL: " + name);
 }
 
 static void Check(bool condition, string name)
@@ -1500,6 +1685,7 @@ sealed class MockSearch : IAsyncDisposable
             HttpListenerContext context;
             try { context = await _listener.GetContextAsync(); }
             catch (Exception ex) when (_stop.IsCancellationRequested && ex is HttpListenerException or ObjectDisposedException) { break; }
+            catch (ObjectDisposedException) when (_stop.IsCancellationRequested) { break; }
             _requests.Enqueue(context.Request.RawUrl + "\n" + context.Request.Headers);
             try
             {
@@ -1631,5 +1817,54 @@ sealed class FakeModel : IAsyncDisposable
         listener.Close();
         try { await server; }
         finally { stop.Dispose(); }
+    }
+}
+
+sealed class RequestAttributionTypeInfoResolver : IJsonTypeInfoResolver
+{
+    public JsonTypeInfo? GetTypeInfo(Type type, JsonSerializerOptions options) =>
+        type == typeof(AgentRequestMessageSourceAttribution)
+            ? JsonTypeInfo.CreateJsonTypeInfo<AgentRequestMessageSourceAttribution>(options)
+            : null;
+}
+
+sealed class RequestAttributionJsonConverter : JsonConverter<AgentRequestMessageSourceAttribution>
+{
+    public override AgentRequestMessageSourceAttribution Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        using var document = JsonDocument.ParseValue(ref reader);
+        var root = document.RootElement;
+        var sourceTypeName = options.PropertyNamingPolicy?.ConvertName(nameof(AgentRequestMessageSourceAttribution.SourceType)) ?? nameof(AgentRequestMessageSourceAttribution.SourceType);
+        var sourceIdName = options.PropertyNamingPolicy?.ConvertName(nameof(AgentRequestMessageSourceAttribution.SourceId)) ?? nameof(AgentRequestMessageSourceAttribution.SourceId);
+        var valueName = options.PropertyNamingPolicy?.ConvertName(nameof(AgentRequestMessageSourceType.Value)) ?? nameof(AgentRequestMessageSourceType.Value);
+        if (!root.TryGetProperty(sourceTypeName, out var sourceTypeJson) || !root.TryGetProperty(sourceIdName, out var sourceIdJson))
+            throw new JsonException("Invalid request message source attribution.");
+
+        var sourceTypeValue = sourceTypeJson.ValueKind switch
+        {
+            JsonValueKind.String => sourceTypeJson.GetString(),
+            JsonValueKind.Object when sourceTypeJson.TryGetProperty(valueName, out var valueJson) => valueJson.GetString(),
+            _ => null
+        };
+        var sourceId = sourceIdJson.GetString();
+        if (string.IsNullOrEmpty(sourceTypeValue) || sourceId is null)
+            throw new JsonException("Invalid request message source attribution.");
+
+        return new AgentRequestMessageSourceAttribution(new AgentRequestMessageSourceType(sourceTypeValue), sourceId);
+    }
+
+    public override void Write(Utf8JsonWriter writer, AgentRequestMessageSourceAttribution value, JsonSerializerOptions options)
+    {
+        var sourceTypeName = options.PropertyNamingPolicy?.ConvertName(nameof(value.SourceType)) ?? nameof(value.SourceType);
+        var sourceIdName = options.PropertyNamingPolicy?.ConvertName(nameof(value.SourceId)) ?? nameof(value.SourceId);
+        var valueName = options.PropertyNamingPolicy?.ConvertName(nameof(value.SourceType.Value)) ?? nameof(value.SourceType.Value);
+
+        writer.WriteStartObject();
+        writer.WritePropertyName(sourceTypeName);
+        writer.WriteStartObject();
+        writer.WriteString(valueName, value.SourceType.Value);
+        writer.WriteEndObject();
+        writer.WriteString(sourceIdName, value.SourceId);
+        writer.WriteEndObject();
     }
 }

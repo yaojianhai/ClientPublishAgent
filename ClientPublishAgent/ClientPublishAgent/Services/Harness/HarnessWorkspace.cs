@@ -3,13 +3,16 @@ using System.Collections.Generic;
 using System.ClientModel;
 using System.ClientModel.Primitives;
 using System.ComponentModel;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -26,6 +29,12 @@ public enum HarnessState { Uninitialized, Ready, Running, AwaitingApproval, Canc
 public sealed record HarnessApproval(Guid Id, string Task, string CurrentVersion, string NextVersion, string? OssHost, string PublishRootDirectory, string Details = "");
 public sealed record HarnessResult(string Text, IReadOnlyList<HarnessApproval> Approvals);
 
+[JsonSourceGenerationOptions(GenerationMode = JsonSourceGenerationMode.Metadata)]
+[JsonSerializable(typeof(AgentRequestMessageSourceAttribution))]
+internal partial class HarnessSessionJsonContext : JsonSerializerContext
+{
+}
+
 /// <summary>One UI-owned persistent Harness conversation. Callbacks must be marshalled to the UI thread.</summary>
 public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
 {
@@ -35,6 +44,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
         ["publish-upgrade-package"] = "publish-upgrade-package-win-x64.ps1",
         ["upgrade"] = "upgrade-win-x64.ps1"
     };
+    private static readonly JsonSerializerOptions SessionSerializerOptions = CreateSessionSerializerOptions();
     private readonly HarnessSettings _settings;
     private readonly Action<string> _output;
     private readonly SemaphoreSlim _mutex = new(1, 1);
@@ -58,6 +68,28 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
     private Exception? _outputError;
     private Task _backgroundRelease = Task.CompletedTask;
     private bool _approveForSession;
+
+    private static JsonSerializerOptions CreateSessionSerializerOptions()
+    {
+        var agentOptions = GetAgentJsonSerializerOptions();
+        var agentResolver = agentOptions.TypeInfoResolver
+            ?? throw new InvalidOperationException("Agent JSON metadata resolver is unavailable.");
+        var options = new JsonSerializerOptions(agentOptions)
+        {
+            TypeInfoResolver = JsonTypeInfoResolver.Combine(agentResolver, new HarnessSessionJsonContext())
+        };
+        return options;
+    }
+
+    [DynamicDependency(DynamicallyAccessedMemberTypes.PublicProperties, "Microsoft.Agents.AI.AgentJsonUtilities", "Microsoft.Agents.AI")]
+    [UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "The known agent options property is preserved by DynamicDependency.")]
+    [UnconditionalSuppressMessage("Trimming", "IL2075", Justification = "The reflected type and property are fixed and preserved by DynamicDependency.")]
+    private static JsonSerializerOptions GetAgentJsonSerializerOptions()
+    {
+        var utilities = typeof(ChatClientAgentSession).Assembly.GetType("Microsoft.Agents.AI.AgentJsonUtilities", throwOnError: true)!;
+        return utilities.GetProperty("DefaultOptions", BindingFlags.Public | BindingFlags.Static)?.GetValue(null) as JsonSerializerOptions
+            ?? throw new MissingMemberException(utilities.FullName, "DefaultOptions");
+    }
 
     public HarnessState State { get { lock (_sync) return _state; } }
     public bool ApproveForSession { get { lock (_sync) return _approveForSession; } }
@@ -181,6 +213,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
             DisableFileMemory = true, DisableAgentSkillsProvider = true, DisableWebSearch = true,
             DisableToolAutoApproval = true, DisableOpenTelemetry = settings.Profile?.Telemetry != true,
             DisableCompaction = settings.Profile?.Compaction != true,
+            AgentModeProviderOptions = new AgentModeProviderOptions { DefaultMode = "execute" },
             MaxContextWindowTokens = settings.Profile?.Compaction == true ? settings.Profile.ContextTokens : null,
             MaxOutputTokens = settings.Profile?.Compaction == true ? settings.Profile.OutputTokens : null,
             BackgroundAgents = background,
@@ -207,7 +240,10 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
                 {
                     ThrowIfDisposed();
                     if (_session is null) throw new InvalidOperationException("No session.");
-                    return PlatformStore.RedactState(await _agent.SerializeSessionAsync(_session, cancellationToken: ct).ConfigureAwait(false), _apiKey);
+                    // This derived cache is rebuilt from chat history on the next run and is not supported by Harness session metadata.
+                    if (_settings.Profile?.Compaction == true)
+                        _session.StateBag.TryRemoveValue("ContextWindowCompactionStrategy");
+                    return PlatformStore.RedactState(await _agent.SerializeSessionAsync(_session, SessionSerializerOptions, cancellationToken: ct).ConfigureAwait(false), _apiKey);
                 }
                 finally { _mutex.Release(); }
             }
@@ -221,7 +257,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
                 {
                     ThrowIfDisposed();
                     if (_session is not null) throw new InvalidOperationException("Already initialized.");
-                    _session = await _agent.DeserializeSessionAsync(stored.Session, cancellationToken: ct).ConfigureAwait(false);
+                    _session = await _agent.DeserializeSessionAsync(stored.Session, SessionSerializerOptions, cancellationToken: ct).ConfigureAwait(false);
                     // ApprovalResponseBinding rejects unanswered serialized requests on the next run.
                     // No approvals/grants are ever reconstructed locally, including previously approved partial batches.
                     SetState(HarnessState.Ready);
@@ -236,6 +272,8 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
             ThrowIfDisposed();
             if (_session is not null) throw new InvalidOperationException("Already initialized; use ResetAsync.");
             _session = await _agent.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
+            var modeProvider = _agent.GetService<AgentModeProvider>() ?? throw new NotSupportedException("Harness mode provider unavailable.");
+            await modeProvider.SetModeAsync(_session, "execute", disableNotification: true, cancellationToken: cancellationToken).ConfigureAwait(false);
             SetState(HarnessState.Ready);
         }
         finally { _mutex.Release(); }
@@ -372,7 +410,13 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
         try
         {
             ThrowIfDisposed();
-            if (State != HarnessState.Ready) throw new InvalidOperationException("Workspace is not ready; resolve approvals or reset the session.");
+            if (State == HarnessState.Cancelled)
+            {
+                await _backgroundRelease.ConfigureAwait(false);
+                SetState(HarnessState.Ready);
+            }
+            else if (State != HarnessState.Ready)
+                throw new InvalidOperationException("Workspace is not ready; resolve approvals or reset the session.");
             return await RunLockedAsync(message, onText, ct).ConfigureAwait(false);
         }
         finally { _mutex.Release(); }

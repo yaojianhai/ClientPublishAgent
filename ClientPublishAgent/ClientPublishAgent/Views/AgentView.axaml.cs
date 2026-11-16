@@ -7,6 +7,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
+using ClientPublishAgent.Services.Harness;
 using ClientPublishAgent.ViewModels;
 
 namespace ClientPublishAgent.Views;
@@ -26,6 +27,7 @@ public partial class AgentView : UserControl
 	{
 		ArgumentNullException.ThrowIfNull(viewModel);
 		InitializeComponent();
+		ChatInput.AddHandler(InputElement.KeyDownEvent, ChatInputKeyDown, RoutingStrategies.Tunnel);
 		DataContextChanged += (_, _) => BindMessages();
 		DataContext = viewModel;
 	}
@@ -49,6 +51,7 @@ public partial class AgentView : UserControl
 		UnbindMessages();
 		if (!_attached || DataContext is not AgentWorkspaceViewModel viewModel) return;
 		_messagesOwner = viewModel;
+		WorkspaceGrid.ColumnDefinitions[4].Width = viewModel.IsDetailsVisible ? new GridLength(2, GridUnitType.Star) : new GridLength(0);
 		viewModel.ChatItems.CollectionChanged += MessagesChanged;
 		viewModel.PropertyChanged += WorkspaceChanged;
 		foreach (var entry in viewModel.ChatItems) Observe(entry);
@@ -97,6 +100,8 @@ public partial class AgentView : UserControl
 	private void WorkspaceChanged(object? sender, PropertyChangedEventArgs e)
 	{
 		if (e.PropertyName == nameof(AgentWorkspaceViewModel.IsBusy)) QueueScroll();
+		if (e.PropertyName == nameof(AgentWorkspaceViewModel.IsDetailsVisible))
+			WorkspaceGrid.ColumnDefinitions[4].Width = _messagesOwner?.IsDetailsVisible == true ? new GridLength(2, GridUnitType.Star) : new GridLength(0);
 		if (e.PropertyName == nameof(AgentWorkspaceViewModel.IsConnected) && _messagesOwner?.IsConnected == true) ChatInput.Focus();
 	}
 
@@ -133,6 +138,76 @@ public partial class AgentView : UserControl
 	{
 		_followTail = true;
 		QueueScroll();
+	}
+
+	private async void SessionItemClicked(object? sender, RoutedEventArgs e)
+	{
+		if (sender is not Control { DataContext: StoredConversation session } || DataContext is not AgentWorkspaceViewModel viewModel) return;
+		viewModel.SelectedSession = session;
+		await viewModel.SwitchToSessionAsync(session);
+	}
+
+	private async void RenameSessionClicked(object? sender, RoutedEventArgs e)
+	{
+		if (sender is not MenuItem { DataContext: StoredConversation session } || DataContext is not AgentWorkspaceViewModel viewModel) return;
+		viewModel.SelectedSession = session;
+		var nameInput = new TextBox { Text = session.Name, MinWidth = 280 };
+		var error = new TextBlock { TextWrapping = Avalonia.Media.TextWrapping.Wrap };
+		var dialog = new Window
+		{
+			Title = "重命名历史会话",
+			Width = 400,
+			Height = 190,
+			CanResize = false,
+			WindowStartupLocation = WindowStartupLocation.CenterOwner
+		};
+		var saveButton = new Button { Content = "保存", MinWidth = 80 };
+		saveButton.Click += (_, _) =>
+		{
+			if (viewModel.RenameSession(session, nameInput.Text ?? "")) dialog.Close();
+			else error.Text = viewModel.Status;
+		};
+		var cancelButton = new Button { Content = "取消", MinWidth = 80 };
+		cancelButton.Click += (_, _) => dialog.Close();
+		dialog.Content = new StackPanel
+		{
+			Margin = new Thickness(18),
+			Spacing = 10,
+			Children =
+			{
+				new TextBlock { Text = "会话名称" },
+				nameInput,
+				error,
+				new StackPanel
+				{
+					Orientation = Avalonia.Layout.Orientation.Horizontal,
+					HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+					Spacing = 8,
+					Children = { cancelButton, saveButton }
+				}
+			}
+		};
+		if (TopLevel.GetTopLevel(this) is not Window owner)
+		{
+			viewModel.Status = "无法打开重命名窗口。";
+			return;
+		}
+		await dialog.ShowDialog(owner);
+		nameInput.Focus();
+	}
+
+	private async void DeleteSessionClicked(object? sender, RoutedEventArgs e)
+	{
+		if (sender is not MenuItem { DataContext: StoredConversation session } || DataContext is not AgentWorkspaceViewModel viewModel) return;
+		viewModel.SelectedSession = session;
+		await viewModel.DeleteSessionAsync(session);
+	}
+
+	private void RestoreBoundProfileClicked(object? sender, RoutedEventArgs e)
+	{
+		if (sender is not MenuItem { DataContext: StoredConversation session } || DataContext is not AgentWorkspaceViewModel viewModel) return;
+		viewModel.SelectedSession = session;
+		viewModel.RestoreBoundProfileCommand.Execute(null);
 	}
 
 	private async void ChatInputKeyDown(object? sender, KeyEventArgs e)

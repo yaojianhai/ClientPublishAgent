@@ -26,6 +26,7 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 	private Task? _operation;
 	private bool _closing;
 	private bool _restoredUnresolved;
+	private bool _needsInitialTitle;
 	private readonly StringBuilder _transcript = new();
 	private readonly StringBuilder _localLog = new();
 	private ChatEntryViewModel? _assistantEntry;
@@ -55,19 +56,23 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 	[ObservableProperty] public partial bool EnableCompaction { get; set; }
 	[ObservableProperty] public partial int ContextTokens { get; set; } = 32000;
 	[ObservableProperty] public partial int OutputTokens { get; set; } = 4096;
-	[ObservableProperty] public partial string Search { get; set; } = "";
 	[ObservableProperty] public partial string HistoryWarning { get; set; } = "";
 	[ObservableProperty] public partial string SessionName { get; set; } = "New conversation";
 	[ObservableProperty] public partial string HarnessInfo { get; set; } = "";
 	[ObservableProperty] public partial string ModeText { get; set; } = "未初始化";
 	[ObservableProperty] public partial string TodoText { get; set; } = "暂无 todo";
+	[ObservableProperty] public partial bool IsDetailsVisible { get; set; } = true;
 	public string CapabilityCatalog => "工作区：真实 Harness FileAccessProvider + 隔离 FileSystemAgentFileStore（读/写/列表/搜索/替换/删除需授权），另有带内容 hash 的简化读写工具。默认逐次审批，也可在聊天中允许当前会话的所有已启用工具。\n" + string.Join("\n", TaskCatalog.Plugins.Select(p => p.Id + " · " + p.Description)) +
 		"\n手动 memory / skills 需授权。独立自动 memory：每轮重新读取指定目录 UTF-8 md/txt/json 文本并送到配置模型，跨会话持久，不写聊天。独立自动 skills：真实 AgentSkillsProvider + 受限 SDK source，每轮刷新 SKILL.md 元数据广告；load_skill/read_skill_resource 需授权并受 hash 锁定，无脚本 runner、不可执行。\n自动目录预算：8 层、256 entries、128 files、64KiB/文件、256KiB 总量；symlink/junction 拒绝，损坏/超限显式失败。请手工创建目录。内容不可信，已识别凭据脱敏。\n联网搜索：用户配置 SearXNG JSON /search endpoint（服务须启用 JSON）；适用于 DeepSeek/OpenAI-compatible。授权后 query 发给该服务，不附带模型密钥，不跟随 redirect、不访问结果 URL。只返回前10条标题/URL/片段/来源，外部内容不可信。\nOTel：仅 opt-in 本地 instrumentation，无默认 exporter。\n背景 Researcher：仅推理，无文件/终端/联网工具。\nTodo / plan / execute：真实 Harness providers；模式直接切换并持久保存。";
 
 	public AgentWorkspaceViewModel() : this(null) { }
 	public AgentWorkspaceViewModel(PlatformStore? store)
 	{
-		ChatItems.CollectionChanged += (_, _) => OnPropertyChanged(nameof(IsChatEmpty));
+		ChatItems.CollectionChanged += (_, _) =>
+		{
+			OnPropertyChanged(nameof(IsChatEmpty));
+			OnPropertyChanged(nameof(CanStartNewConversation));
+		};
 		try
 		{
 			_store = store ?? new PlatformStore();
@@ -94,7 +99,6 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 		RefreshHistory();
 	}
 	partial void OnSelectedSessionChanged(StoredConversation? value) { if (value is not null) SessionName = value.Name; }
-	partial void OnSearchChanged(string value) => RefreshHistory();
 	private AgentProfile CaptureProfile() => new()
 	{
 		Id = SelectedProfile?.Id ?? Guid.NewGuid(), Name = ProfileName.Trim(), Instructions = Instructions,
@@ -123,7 +127,9 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 			_store!.SaveProfiles(next, profile.Id);
 			Profiles.Clear(); foreach (var p in next) Profiles.Add(p);
 			SelectedProfile = profile;
-			Status = "Agent 配置已保存（不含密钥）；配置变更后旧会话不能误恢复。";
+			Status = IsConnected
+				? "Agent 配置已保存（不含密钥）；当前会话保持创建时的配置，新会话将使用最新设置。"
+				: "Agent 配置已保存（不含密钥）；配置变更后旧会话不能误恢复。";
 			return true;
 		}
 		catch (Exception ex) { Status = "保存配置失败：" + ex.Message; return false; }
@@ -165,8 +171,10 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 		if (!RequireStore()) return;
 		try
 		{
-			var history = _store!.Search(Search ?? "", SelectedProfile?.Id);
+			var selectedId = SelectedSession?.Id ?? _current?.Id;
+			var history = _store!.Search("", SelectedProfile?.Id);
 			Sessions.Clear(); foreach (var s in history) Sessions.Add(s);
+			SelectedSession = selectedId is { } id ? Sessions.FirstOrDefault(s => s.Id == id) : null;
 			HistoryWarning = _store.SearchIssues.Count == 0 ? "" : "警告：部分历史缓存无法加载，已隔离；无法确认归属，禁止删除 Agent。\n" +
 				string.Join("\n", _store.SearchIssues.Select(i => i.FileName + "：" + i.Message));
 			if (HistoryWarning.Length > 0) Status = HistoryWarning;
@@ -201,25 +209,81 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 	[RelayCommand]
 	private void RenameSession()
 	{
-		if (!RequireStore() || IsBusy || SelectedSession is null) return;
+		if (!RequireStore() || SelectedSession is not { } session) return;
+		RenameSession(session, SessionName);
+	}
+	public bool RenameSession(StoredConversation session, string name)
+	{
+		if (!RequireStore() || IsBusy) return false;
 		try
 		{
-			_store!.Rename(SelectedSession.Id, SessionName);
-			if (_current?.Id == SelectedSession.Id) _current = _current with { Name = SessionName.Trim() };
+			_store!.Rename(session.Id, name);
+			if (_current?.Id == session.Id) _current = _current with { Name = name.Trim() };
+			SessionName = name.Trim();
+			SelectedSession = session with { Name = name.Trim() };
 			RefreshHistory(); Status = "历史已重命名。";
+			return true;
 		}
-		catch (Exception ex) { Status = "重命名失败：" + ex.Message; }
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or JsonException)
+		{
+			Status = "重命名失败：" + ex.Message;
+			return false;
+		}
 	}
 	[RelayCommand]
-	private void DeleteSession()
+	private async Task DeleteSessionAsync()
 	{
-		if (!RequireStore() || IsBusy || SelectedSession is null) return;
+		if (RequireStore() && SelectedSession is { } session) await DeleteSessionAsync(session);
+	}
+	public async Task<bool> DeleteSessionAsync(StoredConversation session)
+	{
+		if (!RequireStore() || IsBusy) return false;
+		var wasCurrent = IsConnected && _current?.Id == session.Id;
 		try
 		{
-			if (_current?.Id == SelectedSession.Id) throw new InvalidOperationException("请先断开此会话，再删除。");
-			_store!.Delete(SelectedSession.Id); RefreshHistory(); Status = "历史已永久删除。";
+			if (wasCurrent)
+			{
+				await DisconnectAsync();
+				if (IsConnected) return false;
+			}
+			_store!.Delete(session.Id);
+			if (SelectedSession?.Id == session.Id) SelectedSession = null;
+			RefreshHistory();
+			if (wasCurrent)
+			{
+				await StartNewConversationAsync();
+				if (IsConnected) Status = "历史已永久删除；已创建新的空白会话。";
+			}
+			else Status = "历史已永久删除。";
+			return true;
 		}
-		catch (Exception ex) { Status = "删除失败：" + ex.Message; }
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+		{
+			Status = "删除失败：" + ex.Message;
+			return false;
+		}
+	}
+	public async Task SwitchToSessionAsync(StoredConversation session)
+	{
+		if (!RequireStore() || IsBusy) return;
+		if (_current?.Id == session.Id && IsConnected)
+		{
+			SelectedSession = session;
+			return;
+		}
+		if (SelectedProfile is null || SelectedProfile.Id != session.ProfileId || CaptureProfile().Binding != session.Binding)
+		{
+			SelectedSession = session;
+			Status = "此历史会话绑定的 Agent 配置已变化。请从“…”菜单恢复该会话的原 Agent 配置，再点击会话恢复。";
+			return;
+		}
+		SelectedSession = session;
+		if (IsConnected)
+		{
+			await DisconnectAsync();
+			if (IsConnected) return;
+		}
+		await OpenAsync(true);
 	}
 
 	public ObservableCollection<HarnessApproval> Approvals { get; } = [];
@@ -233,12 +297,14 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 	[ObservableProperty] public partial string TaskLog { get; set; } = "";
 	[ObservableProperty] public partial string ScriptInput { get; set; } = "";
 	[ObservableProperty] public partial bool IsScriptInputAvailable { get; set; }
-	[ObservableProperty] public partial string Status { get; set; } = "请配置模型服务并创建会话";
+	[ObservableProperty] public partial string Status { get; set; } = "可直接输入问题开始新会话；首条消息将自动作为历史标题。";
 
 	[ObservableProperty]
 	[NotifyPropertyChangedFor(nameof(CanConnect))]
 	[NotifyPropertyChangedFor(nameof(CanEditSettings))]
 	[NotifyPropertyChangedFor(nameof(CanSend))]
+	[NotifyPropertyChangedFor(nameof(CanType))]
+	[NotifyPropertyChangedFor(nameof(CanStartNewConversation))]
 	[NotifyPropertyChangedFor(nameof(CanDecide))]
 	[NotifyPropertyChangedFor(nameof(CanCancel))]
 	[NotifyPropertyChangedFor(nameof(CanDisconnect))]
@@ -252,6 +318,8 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 	[NotifyPropertyChangedFor(nameof(CanConnect))]
 	[NotifyPropertyChangedFor(nameof(CanEditSettings))]
 	[NotifyPropertyChangedFor(nameof(CanSend))]
+	[NotifyPropertyChangedFor(nameof(CanType))]
+	[NotifyPropertyChangedFor(nameof(CanStartNewConversation))]
 	[NotifyPropertyChangedFor(nameof(CanCancel))]
 	[NotifyPropertyChangedFor(nameof(CanDisconnect))]
 	public partial bool IsConnected { get; set; }
@@ -274,8 +342,11 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 	public string ApprovalModeText => SessionApprovalEnabled ? ChatText.SessionApproval : ChatText.DefaultApproval;
 
 	public bool CanConnect => _store is not null && !IsBusy && !IsConnected && !_closing;
-	public bool CanEditSettings => _store is not null && !IsBusy && !IsConnected && !_closing;
-	public bool CanSend => IsConnected && !IsBusy && !HasApproval && !_closing && _workspace?.State == HarnessState.Ready;
+	public bool CanEditSettings => _store is not null && !IsBusy && !_closing;
+	public bool CanSend => !IsBusy && !HasApproval && !_closing &&
+		(IsConnected ? _workspace?.State is HarnessState.Ready or HarnessState.Cancelled : CanConnect);
+	public bool CanType => !_closing && (IsConnected || CanConnect);
+	public bool CanStartNewConversation => IsConnected && !IsBusy && !_closing && ChatItems.Any(c => c.Role == "user");
 	public bool CanDecide => !IsBusy && !_closing && SelectedApproval is not null;
 	public bool CanCancel => (IsConnected && IsBusy) || HasApproval || (_workspace?.HasBackgroundWork == true);
 	public bool CanDisconnect => IsConnected && !IsBusy && !_closing;
@@ -286,8 +357,24 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 		: "没有待审批的工具请求。";
 
 	[RelayCommand]
-	private async Task ConnectAsync()
-		=> await OpenAsync(false);
+	private async Task NewConversationAsync()
+	{
+		if (!CanStartNewConversation || _workspace is null) return;
+		await DisconnectAsync();
+		if (!IsConnected) await StartNewConversationAsync();
+	}
+	private async Task StartNewConversationAsync()
+	{
+		if (!CanConnect) return;
+		SelectedSession = null;
+		SessionName = "New conversation";
+		await OpenAsync(false);
+	}
+	public async Task InitializeOnStartupAsync()
+	{
+		if (IsConnected || IsBusy || _closing) return;
+		await StartNewConversationAsync();
+	}
 	[RelayCommand]
 	private async Task RestoreSessionAsync()
 		=> await OpenAsync(true);
@@ -310,6 +397,7 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 			if (stored is not null) await _workspace.RestoreAsync(stored, profile);
 			else await _workspace.InitializeAsync();
 			_current = stored ?? new StoredConversation { ProfileId = profile.Id, Binding = profile.Binding, ProfileSnapshot = profile, Name = SessionName };
+			_needsInitialTitle = stored is null;
 			_restoredUnresolved = stored?.UnsafeToResume == true;
 			_transcript.Clear().Append(stored?.Transcript ?? "");
 			_localLog.Clear().Append(stored?.Log ?? "");
@@ -322,10 +410,16 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 			else if (!string.IsNullOrEmpty(stored?.Transcript))
 				ChatItems.Add(new ChatEntryViewModel(this, "notice", ChatText.History, stored.Transcript));
 			IsConnected = true;
-			await SaveCurrentAsync();
+			if (stored is not null) await SaveCurrentAsync();
+			else
+			{
+				UpdateWorkspaceDetails(await _workspace.SerializeAsync());
+			}
 			Status = stored?.UnsafeToResume == true
 				? "历史已恢复；未完成审批/授权与背景任务已失效，下一轮 Harness 拒绝旧审批/标记旧背景任务 lost，绝不自动恢复执行。"
-				: "持久会话已就绪；发送消息时连接模型服务。";
+				: stored is null
+					? "新会话已就绪；发送首条消息后自动保存并以问题命名。"
+					: "持久会话已就绪；发送消息时连接模型服务。";
 		}
 		catch (Exception ex)
 		{
@@ -359,32 +453,60 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 	[RelayCommand]
 	private async Task SendAsync()
 	{
-		if (!CanSend || _workspace is null) return;
+		if (!CanSend) return;
 		var message = Input?.Trim() ?? "";
 		if (message.Length == 0) { Status = "请输入消息"; return; }
+		if (IsConnected && _needsInitialTitle && _current is { } current && current.Binding != CaptureProfile().Binding)
+		{
+			if (!TrySaveProfile()) return;
+			await DisconnectAsync();
+		}
+		if (!IsConnected)
+		{
+			await StartNewConversationAsync();
+		}
+		var workspace = _workspace;
+		if (!IsConnected || workspace is null) return;
+		var previousTranscript = _transcript.ToString();
 		Input = "";
-		ChatItems.Add(new ChatEntryViewModel(this, "user", ChatText.You, _workspace.RedactLocal(message)));
+		var userMessage = new ChatEntryViewModel(this, "user", ChatText.You, workspace.RedactLocal(message));
+		ChatItems.Add(userMessage);
 		_assistantEntry = null;
 		AppendTranscript($"\n\n你：{message}\n\nAgent：");
-		await RunAsync(() => _workspace.SendAsync(message, StreamText));
-	}
-	[RelayCommand] private Task PlanModeAsync() => ChangeModeAsync("plan");
-	[RelayCommand] private Task ExecuteModeAsync() => ChangeModeAsync("execute");
-	private async Task ChangeModeAsync(string mode)
-	{
-		if (!CanSend || _workspace is null) return;
-		IsBusy = true;
-		try
+		if (_needsInitialTitle && _current is not null)
 		{
-			await _workspace.SetModeAsync(mode);
-			AppendConversation("\n[用户切换 Harness 模式：" + mode + "]\n");
-			await SaveCurrentAsync();
-			Status = "Harness 模式已切换并保存：" + mode;
+			var title = workspace.RedactLocal(message).ReplaceLineEndings(" ").Trim();
+			_current = _current with { Name = title };
+			SessionName = title;
+			IsBusy = true;
+			var sessionSaved = false;
+			try
+			{
+				await SaveCurrentAsync();
+				_needsInitialTitle = false;
+				OnPropertyChanged(nameof(CanEditSettings));
+				sessionSaved = true;
+			}
+			catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or JsonException)
+			{
+				ChatItems.Remove(userMessage);
+				_transcript.Clear().Append(previousTranscript);
+				Conversation = TrimLog(previousTranscript);
+				Input = message;
+				Status = "无法创建历史会话，消息未发送：" + ex.Message;
+			}
+			finally
+			{
+				if (_needsInitialTitle)
+				{
+					IsBusy = false;
+					OnPropertyChanged(nameof(CanSend));
+				}
+			}
+			if (!sessionSaved) return;
 		}
-		catch (Exception ex) { Status = "模式切换/保存失败：" + ex.Message; }
-		finally { IsBusy = false; }
+		await RunAsync(() => workspace.SendAsync(message, StreamText));
 	}
-
 	[RelayCommand]
 	private Task ApproveAsync() => DecideAsync(true);
 
@@ -468,10 +590,11 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 		}
 		catch (OperationCanceledException)
 		{
+			_restoredUnresolved = true;
 			ExpireApprovalCards();
 			Approvals.Clear(); SelectedApproval = null; HasApproval = false;
-			Status = "已取消。已执行的文件/终端/发布操作可能已产生副作用；请检查本地文件及日志，再断开/恢复会话。";
-			AppendConversation("\n[已取消；未完成授权不会恢复自动执行。]\n");
+			Status = "已停止；可以继续发送消息。未完成的工具授权不会自动执行，已执行的操作请检查文件与日志。";
+			AppendConversation("\n[已停止；未完成授权不会恢复自动执行。]\n");
 		}
 		catch (Exception ex)
 		{
@@ -496,12 +619,13 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 	{
 		if (_workspace is null) return;
 		_workspace.Cancel();
+		_restoredUnresolved = true;
 		ExpireApprovalCards();
 		SessionApprovalEnabled = false;
 		if (!IsBusy)
 		{
 			Approvals.Clear(); SelectedApproval = null; HasApproval = false;
-			Status = "已取消待审批请求，请断开并重新创建会话。";
+			Status = "已停止待审批请求；可以继续发送消息，未完成的工具授权不会自动执行。";
 			OnPropertyChanged(nameof(CanSend));
 		}
 	}
@@ -510,12 +634,14 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 	private async Task DisconnectAsync()
 	{
 		if (!CanDisconnect || _workspace is null) return;
+		IsBusy = true;
 		try
 		{
 			if (_workspace.HasBackgroundWork) _restoredUnresolved = true;
 			await _workspace.StopBackgroundAsync(); await SaveCurrentAsync();
 		}
 		catch (Exception ex) { Status = "保存失败，未断开：" + ex.Message; return; }
+		finally { IsBusy = false; }
 		_workspace.Dispose();
 		ExpireApprovalCards();
 		_workspace = null;
@@ -529,6 +655,7 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 	private async Task SaveCurrentAsync()
 	{
 		if (_workspace is null || _current is null) return;
+		if (_needsInitialTitle && !ChatItems.Any(c => c.Role == "user")) return;
 		if (!RequireStore()) throw new InvalidOperationException(Status);
 		var state = await _workspace.SerializeAsync();
 		var unsafeState = _workspace.State != HarnessState.Ready || _restoredUnresolved || _workspace.HasBackgroundWork;
@@ -540,18 +667,28 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 			Messages = ChatItems.Select(c => c.Snapshot()).Select(m => m with { Title = _workspace.RedactLocal(m.Title), Text = _workspace.RedactLocal(m.Text) }).ToArray(),
 			UnsafeToResume = unsafeState, Updated = DateTimeOffset.UtcNow };
 		_store!.Save(_current);
+		UpdateWorkspaceDetails(state);
+		RefreshHistory();
+	}
+	private void UpdateWorkspaceDetails(JsonElement state)
+	{
 		HarnessInfo = state.ToString();
 		if (state.TryGetProperty("stateBag", out var bag))
 		{
-			ModeText = bag.TryGetProperty("AgentModeProvider", out var mode) && mode.TryGetProperty("currentMode", out var value)
-				? value.GetString() ?? "未初始化" : "未初始化";
+			var currentMode = bag.TryGetProperty("AgentModeProvider", out var mode) && mode.TryGetProperty("currentMode", out var value)
+				? value.GetString() : null;
+			ModeText = currentMode switch
+			{
+				"plan" => "规划",
+				"execute" => "自动执行",
+				_ => currentMode ?? "未初始化"
+			};
 			TodoText = bag.TryGetProperty("TodoProvider", out var todo) && todo.TryGetProperty("items", out var items) && items.GetArrayLength() > 0
 				? string.Join(Environment.NewLine, items.EnumerateArray().Select(item =>
 					(item.TryGetProperty("isComplete", out var done) && done.GetBoolean() ? "✓ " : "□ ") +
 					(item.TryGetProperty("title", out var title) ? title.GetString() : item.GetRawText())))
 				: "暂无 todo；模型可使用真实 Harness todos 工具管理任务。";
 		}
-		RefreshHistory();
 	}
 	public async Task<bool> CloseAsync()
 	{

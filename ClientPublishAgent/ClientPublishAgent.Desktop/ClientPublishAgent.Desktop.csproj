@@ -13,6 +13,15 @@
 		<ApplicationManifest>app.manifest</ApplicationManifest>
 	</PropertyGroup>
 
+	<PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+		<StartupHookSupport>true</StartupHookSupport>
+	</PropertyGroup>
+
+	<ItemGroup Condition="'$(Configuration)' == 'Debug'">
+		<PackageReference Include="Avalonia.Markup.Xaml.Loader" PrivateAssets="All" Publish="True" />
+		<PackageReference Include="HotAvalonia" PrivateAssets="All" Publish="True" />
+	</ItemGroup>
+
 	<ItemGroup>
 		<PackageReference Include="PublishAotClang" PrivateAssets="all" Condition="$([MSBuild]::IsOSPlatform('Windows')) and ('$(RuntimeIdentifier)' == 'linux-arm64' or '$(RuntimeIdentifier)' == 'linux-x64')" />
 		<PackageReference Include="Avalonia.Desktop" />

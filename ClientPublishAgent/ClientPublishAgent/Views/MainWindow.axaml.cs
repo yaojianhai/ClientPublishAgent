@@ -10,6 +10,11 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        Opened += async (_, _) =>
+        {
+            if (AgentWorkspace.DataContext is AgentWorkspaceViewModel agent)
+                await agent.InitializeOnStartupAsync();
+        };
         Closing += async (_, e) =>
         {
             if (_closedSafely) return;

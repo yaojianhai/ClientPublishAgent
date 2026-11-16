@@ -5,26 +5,29 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:views="using:ClientPublishAgent.Views"
+        xmlns:svg="clr-namespace:Avalonia.Svg.Skia;assembly=Svg.Controls.Skia.Avalonia"
         mc:Ignorable="d" d:DesignWidth="1000" d:DesignHeight="720"
         x:Class="ClientPublishAgent.Views.MainWindow"
         Width="1200" Height="720" MinWidth="900" MinHeight="600"
-        Icon="/Assets/avalonia-logo.ico"
+        Icon="/Assets/Icon.png"
         Title="个人工作平台"
         WindowStartupLocation="CenterScreen">
     <Window.Content>
-        <controls:TabControl>
-            <TabItem Header="Agent 工作区">
-                <views:AgentView x:Name="AgentWorkspace" />
-            </TabItem>
-            <TabItem Header="手工跨平台任务">
-                <views:MainView />
-            </TabItem>
-            <TabItem Header="打包目录配置">
-                <views:PackagingPathsView />
-            </TabItem>
-            <TabItem Header="脚本管理">
-                <views:ScriptManagerView />
-            </TabItem>
-        </controls:TabControl>
+        <Grid RowDefinitions="Auto,*">
+            <controls:TabControl x:Name="MainTabs" Grid.Row="1">
+                <TabItem Header="Agent 工作区">
+                    <views:AgentView x:Name="AgentWorkspace" />
+                </TabItem>
+                <TabItem Header="手工跨平台任务">
+                    <views:MainView />
+                </TabItem>
+                <TabItem Header="打包目录配置">
+                    <views:PackagingPathsView />
+                </TabItem>
+                <TabItem Header="脚本管理">
+                    <views:ScriptManagerView />
+                </TabItem>
+            </controls:TabControl>
+        </Grid>
     </Window.Content>
 </Window>
