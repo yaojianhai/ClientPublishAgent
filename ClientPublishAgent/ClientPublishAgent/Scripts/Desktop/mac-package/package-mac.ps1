@@ -11,6 +11,8 @@
 
 	[string]$SigningIdentity = $env:APPLE_SIGNING_IDENTITY,
 
+	[string]$NotaryKeychainProfile = $env:APPLE_NOTARY_PROFILE,
+
 	[string]$BundleIdentifier = "com.gildata.warrenqf1"
 )
 
@@ -26,6 +28,39 @@ function Test-RequiredCommand {
 	if ($null -eq (Get-Command $Name -ErrorAction SilentlyContinue)) {
 		throw "未找到 macOS 打包所需命令：$Name"
 	}
+}
+
+function Submit-ForNotarization {
+	param(
+		[Parameter(Mandatory)]
+		[string]$Path,
+
+		[Parameter(Mandatory)]
+		[string]$Description
+	)
+
+	Write-Host "提交 $Description 到 Apple 公证服务并等待结果。"
+	$output = & xcrun notarytool submit $Path --keychain-profile $NotaryKeychainProfile --wait --output-format json 2>&1
+	$exitCode = $LASTEXITCODE
+	$outputText = ($output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+	if (-not [string]::IsNullOrWhiteSpace($outputText)) {
+		Write-Host $outputText
+	}
+	if ($exitCode -ne 0) {
+		throw "Apple 公证提交失败（退出代码：$exitCode）：$Description"
+	}
+
+	try {
+		$submission = ConvertFrom-Json -InputObject $outputText -ErrorAction Stop
+	}
+	catch {
+		throw "无法解析 Apple 公证结果：$Description。原始输出：$outputText"
+	}
+	if ($submission.status -ne "Accepted") {
+		$logHint = if ([string]::IsNullOrWhiteSpace([string]$submission.id)) { "" } else { " 可用 xcrun notarytool log $($submission.id) --keychain-profile `"$NotaryKeychainProfile`" 查询详情。" }
+		throw "Apple 未接受 $Description 公证，状态：$($submission.status)。$logHint"
+	}
+	Write-Host "Apple 已接受 $Description 公证（提交 ID：$($submission.id)）。"
 }
 
 function Invoke-NativeCommand {
@@ -60,8 +95,19 @@ if (-not $IsMacOS) {
 	throw "package-mac.ps1 必须在 macOS 上通过 PowerShell 运行。"
 }
 
+$hasSigningIdentity = -not [string]::IsNullOrWhiteSpace($SigningIdentity)
+$hasNotaryKeychainProfile = -not [string]::IsNullOrWhiteSpace($NotaryKeychainProfile)
+if ($hasSigningIdentity -ne $hasNotaryKeychainProfile) {
+	throw "macOS 完整分发要求同时提供 Developer ID 签名身份和 notarytool 钥匙串配置名称；两项都留空时生成未签名测试包。"
+}
+
 foreach ($command in "uname", "chmod", "hdiutil", "lipo", "xattr", "ln", "SetFile") {
 	Test-RequiredCommand -Name $command
+}
+if ($hasSigningIdentity) {
+	foreach ($command in "codesign", "xcrun", "ditto") {
+		Test-RequiredCommand -Name $command
+	}
 }
 
 if ([string]::IsNullOrWhiteSpace($RuntimeIdentifier)) {
@@ -199,6 +245,13 @@ try {
 		Write-Host "使用 Developer ID 身份签名 macOS 应用：$SigningIdentity"
 		Invoke-NativeCommand -Name "codesign" -Arguments @("--force", "--deep", "--options", "runtime", "--timestamp", "--sign", $SigningIdentity, $appBundle)
 		Invoke-NativeCommand -Name "codesign" -Arguments @("--verify", "--deep", "--strict", $appBundle)
+
+		$notarizationArchive = Join-Path $stagingDirectory "${applicationName}-notarization.zip"
+		Invoke-NativeCommand -Name "ditto" -Arguments @("-c", "-k", "--keepParent", $appBundle, $notarizationArchive)
+		Submit-ForNotarization -Path $notarizationArchive -Description "macOS 应用"
+		Invoke-NativeCommand -Name "xcrun" -Arguments @("stapler", "staple", $appBundle)
+		Invoke-NativeCommand -Name "xcrun" -Arguments @("stapler", "validate", $appBundle)
+		Invoke-NativeCommand -Name "codesign" -Arguments @("--verify", "--deep", "--strict", $appBundle)
 	}
 
 	Copy-Item -LiteralPath $appBundle -Destination $dmgContentsDirectory -Recurse -Force
@@ -228,6 +281,10 @@ try {
 		$diskImageIdentifier = "$BundleIdentifier.dmg"
 		Write-Host "使用 Developer ID 身份签名 DMG：$SigningIdentity"
 		Invoke-NativeCommand -Name "codesign" -Arguments @("--force", "--timestamp", "--sign", $SigningIdentity, "--identifier", $diskImageIdentifier, $dmgFile)
+		Invoke-NativeCommand -Name "codesign" -Arguments @("--verify", "--strict", $dmgFile)
+		Submit-ForNotarization -Path $dmgFile -Description "macOS DMG"
+		Invoke-NativeCommand -Name "xcrun" -Arguments @("stapler", "staple", $dmgFile)
+		Invoke-NativeCommand -Name "xcrun" -Arguments @("stapler", "validate", $dmgFile)
 		Invoke-NativeCommand -Name "codesign" -Arguments @("--verify", "--strict", $dmgFile)
 	}
 }

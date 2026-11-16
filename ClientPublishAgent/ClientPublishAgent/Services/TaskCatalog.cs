@@ -7,7 +7,7 @@ using System.Text.RegularExpressions;
 namespace ClientPublishAgent.Services;
 
 public enum NativeHost { Windows, Linux, MacOS }
-public sealed record PluginRequest(string Task, string ScriptsRoot, string RuntimeIdentifier, string CurrentVersion, string NextVersion, string OssHost, string SourceDirectory = "", string PackageType = "upgrade-installer", bool PublishAot = true, string SigningIdentity = "");
+public sealed record PluginRequest(string Task, string ScriptsRoot, string RuntimeIdentifier, string CurrentVersion, string NextVersion, string OssHost, string SourceDirectory = "", string PackageType = "upgrade-installer", bool PublishAot = true, string SigningIdentity = "", string NotaryKeychainProfile = "");
 public sealed record PluginCommand(string Executable, IReadOnlyList<string> Arguments, string Directory, string OutputRoot,
     string? ScriptPath = null, string? SourceDirectory = null);
 public interface ITaskPlugin
@@ -108,6 +108,8 @@ public static class TaskCatalog
                 args.AddRange(["-PublishAot", request.PublishAot.ToString().ToLowerInvariant()]);
             if (id == "macos-package" && !string.IsNullOrWhiteSpace(request.SigningIdentity))
                 args.AddRange(["-SigningIdentity", request.SigningIdentity.Trim()]);
+            if (id == "macos-package" && !string.IsNullOrWhiteSpace(request.NotaryKeychainProfile))
+                args.AddRange(["-NotaryKeychainProfile", request.NotaryKeychainProfile.Trim()]);
             if (!string.IsNullOrEmpty(request.OssHost)) args.AddRange(["-OssHost", request.OssHost]);
             var root = id is "windows-package" or "linux-package" or "macos-package"
                 ? GetDesktopOutputRoot(id, request.ScriptsRoot, request.RuntimeIdentifier)

@@ -68,6 +68,7 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty] public partial string NextVersion { get; set; } = "";
     [ObservableProperty] public partial string OssHost { get; set; } = "";
     [ObservableProperty] public partial string SigningIdentity { get; set; } = Environment.GetEnvironmentVariable("APPLE_SIGNING_IDENTITY") ?? "";
+    [ObservableProperty] public partial string NotaryKeychainProfile { get; set; } = Environment.GetEnvironmentVariable("APPLE_NOTARY_PROFILE") ?? "";
     [ObservableProperty] public partial bool IsConfirmed { get; set; }
     [ObservableProperty] public partial bool PublishAot { get; set; } = true;
     [ObservableProperty] public partial bool IsRunning { get; set; }
@@ -104,9 +105,21 @@ public partial class MainViewModel : ViewModelBase
         }
     }
 
-    public string SelectionStatus => TryGetPluginSelection(out _, out _, out var reason)
-        ? $"将先执行 {SelectedSystem} {SelectedArchitecture} {(PublishAot ? "Native AOT" : "非 AOT")} 发布，再生成{SelectedReleaseType}{(IsMacOSSelected ? (string.IsNullOrWhiteSpace(SigningIdentity) ? "（未配置签名）" : "（使用 Developer ID 签名）") : "")}。"
-        : reason;
+    public string SelectionStatus
+    {
+        get
+        {
+            if (!TryGetPluginSelection(out _, out _, out var reason)) return reason;
+            var macStatus = !IsMacOSSelected ? "" : SelectedReleaseType == "升级包"
+                ? "（仅生成升级包，不生成 app/DMG）"
+                : string.IsNullOrWhiteSpace(SigningIdentity) && string.IsNullOrWhiteSpace(NotaryKeychainProfile)
+                    ? "（未签名、未公证）"
+                    : !string.IsNullOrWhiteSpace(SigningIdentity) && !string.IsNullOrWhiteSpace(NotaryKeychainProfile)
+                        ? "（签名并公证）"
+                        : "（签名与公证配置不完整）";
+            return $"将先执行 {SelectedSystem} {SelectedArchitecture} {(PublishAot ? "Native AOT" : "非 AOT")} 发布，再生成{SelectedReleaseType}{macStatus}。";
+        }
+    }
 
     public MainViewModel()
     {
@@ -173,6 +186,9 @@ public partial class MainViewModel : ViewModelBase
                 throw new InvalidOperationException("请先确认已检查发布目录及备份。");
             if (!TryGetPluginSelection(out var plugin, out var runtime, out var selectionError))
                 throw new PlatformNotSupportedException(selectionError);
+            if (IsMacOSSelected && SelectedReleaseType != "升级包" &&
+                string.IsNullOrWhiteSpace(SigningIdentity) != string.IsNullOrWhiteSpace(NotaryKeychainProfile))
+                throw new InvalidOperationException("macOS 完整分发要求同时填写 Developer ID 签名身份和 notarytool 钥匙串配置名称；两项都留空时生成未签名测试包。");
 
             var current = ParseVersion(CurrentVersion, "当前版本");
             var next = ParseVersion(NextVersion, "目标版本");
@@ -196,7 +212,8 @@ public partial class MainViewModel : ViewModelBase
                     _ => "upgrade-installer"
                 };
                 var command = TaskCatalog.Get(plugin).Prepare(new PluginRequest(plugin, scriptsRoot, runtime,
-                    CurrentVersion.Trim(), NextVersion.Trim(), OssHost.Trim(), SourceDirectory, packageType, PublishAot, SigningIdentity.Trim()));
+                    CurrentVersion.Trim(), NextVersion.Trim(), OssHost.Trim(), SourceDirectory, packageType, PublishAot,
+                    SigningIdentity.Trim(), NotaryKeychainProfile.Trim()));
                 IsRunning = true; IsConfirmed = false;
                 _cancellation = new CancellationTokenSource();
                 AppendLog("输出根目录：" + command.OutputRoot);

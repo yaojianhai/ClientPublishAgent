@@ -8,6 +8,7 @@
 	[string]$SourceDirectory = $env:CLIENT_PUBLISH_SOURCE_DIRECTORY,
 	[string]$OutputDirectory,
 	[string]$SigningIdentity = $env:APPLE_SIGNING_IDENTITY,
+	[string]$NotaryKeychainProfile = $env:APPLE_NOTARY_PROFILE,
 	[string]$BundleIdentifier = "com.gildata.warrenqf1",
 	[ValidateSet("upgrade", "installer", "upgrade-installer")]
 	[string]$PackageType = "upgrade-installer",
@@ -16,6 +17,11 @@
 )
 
 $ErrorActionPreference = "Stop"
+$hasSigningIdentity = -not [string]::IsNullOrWhiteSpace($SigningIdentity)
+$hasNotaryKeychainProfile = -not [string]::IsNullOrWhiteSpace($NotaryKeychainProfile)
+if ($PackageType -in "installer", "upgrade-installer" -and $hasSigningIdentity -ne $hasNotaryKeychainProfile) {
+	throw "macOS 完整分发要求同时提供 Developer ID 签名身份和 notarytool 钥匙串配置名称；两项都留空时生成未签名测试包。"
+}
 $publishAotEnabled = $PublishAot -eq "true"
 $backupScript = Join-Path (Split-Path -Parent $PSScriptRoot) "backup-staging-release.ps1"
 . $backupScript
@@ -58,6 +64,7 @@ if (-not [string]::IsNullOrWhiteSpace($SourceDirectory)) {
 if (-not [string]::IsNullOrWhiteSpace($OssHost)) { $upgradeParameters.OssHost = $OssHost }
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { $packageParameters.OutputDirectory = Join-Path $rootDirectory "output" } else { $packageParameters.OutputDirectory = $OutputDirectory }
 if (-not [string]::IsNullOrWhiteSpace($SigningIdentity)) { $packageParameters.SigningIdentity = $SigningIdentity }
+if (-not [string]::IsNullOrWhiteSpace($NotaryKeychainProfile)) { $packageParameters.NotaryKeychainProfile = $NotaryKeychainProfile }
 & $publishScript @publishParameters
 if ($PackageType -in "upgrade", "upgrade-installer") { & $upgradeScript @upgradeParameters }
 if ($PackageType -eq "installer") {
