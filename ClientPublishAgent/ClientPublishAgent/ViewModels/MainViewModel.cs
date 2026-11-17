@@ -1,8 +1,8 @@
 ﻿using System;
 using System.ComponentModel;
 using System.Collections.Generic;
-using System.Linq;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -22,35 +22,25 @@ public partial class MainViewModel : ViewModelBase
     private readonly PackagingPathsStore _pathsStore = new();
     private CancellationTokenSource? _cancellation;
 
-    public string[] Systems { get; } = ["Windows", "Linux", "macOS"];
     public string[] Architectures { get; } = ["x64", "arm64"];
     public string[] ReleaseTypes { get; } = ["升级包", "安装包", "升级+安装包"];
 
-    private string _selectedSystem = "Windows";
-    public string SelectedSystem
+    public string SelectedSystem => TaskCatalog.Host switch
     {
-        get => _selectedSystem;
-        set
-        {
-            if (SetProperty(ref _selectedSystem, value))
-            {
-                OnPropertyChanged(nameof(SelectionStatus));
-                OnPropertyChanged(nameof(IsMacOSSelected));
-                OnPropertyChanged(nameof(OutputDirectory));
-            }
-        }
-    }
-
-    private string _selectedArchitecture = "x64";
+        NativeHost.Windows => "Windows",
+        NativeHost.MacOS => "macOS",
+        _ => "Linux"
+    };
+    private string _selectedArchitecture = RuntimeInformation.OSArchitecture == Architecture.Arm64 ? "arm64" : "x64";
     public string SelectedArchitecture
     {
         get => _selectedArchitecture;
         set
         {
+            if (value is not ("x64" or "arm64")) throw new ArgumentOutOfRangeException(nameof(value));
             if (SetProperty(ref _selectedArchitecture, value))
             {
-                OnPropertyChanged(nameof(SelectionStatus));
-                OnPropertyChanged(nameof(OutputDirectory));
+                RefreshVersions();
             }
         }
     }
@@ -59,14 +49,26 @@ public partial class MainViewModel : ViewModelBase
     public string SelectedReleaseType
     {
         get => _selectedReleaseType;
-        set
-        {
-            if (SetProperty(ref _selectedReleaseType, value)) OnPropertyChanged(nameof(SelectionStatus));
-        }
+        set => SetProperty(ref _selectedReleaseType, value);
     }
-    [ObservableProperty] public partial string CurrentVersion { get; set; } = "";
-    [ObservableProperty] public partial string NextVersion { get; set; } = "";
-    [ObservableProperty] public partial string OssHost { get; set; } = "";
+    private string _currentVersion = "";
+    public string CurrentVersion
+    {
+        get => _currentVersion;
+        private set => SetProperty(ref _currentVersion, value);
+    }
+    private string _nextVersion = "";
+    public string NextVersion
+    {
+        get => _nextVersion;
+        private set => SetProperty(ref _nextVersion, value);
+    }
+    private string _versionSourceStatus = "";
+    public string VersionSourceStatus
+    {
+        get => _versionSourceStatus;
+        private set => SetProperty(ref _versionSourceStatus, value);
+    }
     [ObservableProperty] public partial string SigningIdentity { get; set; } = Environment.GetEnvironmentVariable("APPLE_SIGNING_IDENTITY") ?? "";
     [ObservableProperty] public partial string NotaryKeychainProfile { get; set; } = Environment.GetEnvironmentVariable("APPLE_NOTARY_PROFILE") ?? "";
     [ObservableProperty] public partial bool IsConfirmed { get; set; }
@@ -81,100 +83,104 @@ public partial class MainViewModel : ViewModelBase
     public string MarketServerScriptsDirectory => Path.Combine(AppContext.BaseDirectory, "Scripts", "MarketServer");
     public string SourceDirectory => PackagingPathProvider.SourceDirectory;
     public bool IsMacOSSelected => SelectedSystem == "macOS";
-    public string OutputDirectory
-    {
-        get
-        {
-            var (plugin, runtime) = SelectedSystem switch
-            {
-                "Windows" => ("windows-package", "win-" + SelectedArchitecture),
-                "Linux" => ("linux-package", "linux-" + SelectedArchitecture),
-                "macOS" => ("macos-package", "osx-" + SelectedArchitecture),
-                _ => ("", "")
-            };
-            if (plugin.Length == 0) return "请选择有效的系统。";
-            try
-            {
-                return TaskCatalog.GetDesktopOutputRoot(plugin, DesktopScriptsDirectory, runtime);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or
-                InvalidDataException or ArgumentException or NotSupportedException)
-            {
-                return "无法解析打包输出目录：" + ex.Message;
-            }
-        }
-    }
-
-    public string SelectionStatus
-    {
-        get
-        {
-            if (!TryGetPluginSelection(out _, out _, out var reason)) return reason;
-            var macStatus = !IsMacOSSelected ? "" : SelectedReleaseType == "升级包"
-                ? "（仅生成升级包，不生成 app/DMG）"
-                : string.IsNullOrWhiteSpace(SigningIdentity) && string.IsNullOrWhiteSpace(NotaryKeychainProfile)
-                    ? "（未签名、未公证）"
-                    : !string.IsNullOrWhiteSpace(SigningIdentity) && !string.IsNullOrWhiteSpace(NotaryKeychainProfile)
-                        ? "（签名并公证）"
-                        : "（签名与公证配置不完整）";
-            return $"将先执行 {SelectedSystem} {SelectedArchitecture} {(PublishAot ? "Native AOT" : "非 AOT")} 发布，再生成{SelectedReleaseType}{macStatus}。";
-        }
-    }
-
     public MainViewModel()
     {
-        PackagingPathsStore.SourceDirectoryChanged += SourceDirectoryChanged;
         WindowsPublishConfigStore.ConfigurationChanged += PublishConfigurationChanged;
         _runner.InputAvailabilityChanged += available => Dispatcher.UIThread.Invoke(() =>
         {
             IsScriptInputAvailable = available;
             if (!available) ScriptInput = "";
         });
-        SelectedSystem = OperatingSystem.IsWindows() ? "Windows" : OperatingSystem.IsMacOS() ? "macOS" : "Linux";
-        var architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture ==
-            System.Runtime.InteropServices.Architecture.Arm64 ? "arm64" : "x64";
-        SelectedArchitecture = architecture;
+        RefreshVersions();
     }
 
     private bool TryGetPluginSelection(out string plugin, out string runtime, out string reason)
     {
-        plugin = SelectedSystem switch
+        var host = TaskCatalog.Host;
+        plugin = host switch
         {
-            "Windows" => "windows-package",
-            "Linux" => "linux-package",
-            "macOS" => "macos-package",
+            NativeHost.Windows => "windows-package",
+            NativeHost.Linux => "linux-package",
+            NativeHost.MacOS => "macos-package",
             _ => ""
         };
-        runtime = SelectedSystem switch
+        runtime = (host, SelectedArchitecture) switch
         {
-            "Windows" => "win-" + SelectedArchitecture,
-            "Linux" => "linux-" + SelectedArchitecture,
-            "macOS" => "osx-" + SelectedArchitecture,
+            (NativeHost.Windows, "x64") => "win-x64",
+            (NativeHost.Windows, "arm64") => "win-arm64",
+            (NativeHost.Linux, "x64") => "linux-x64",
+            (NativeHost.Linux, "arm64") => "linux-arm64",
+            (NativeHost.MacOS, "x64") => "osx-x64",
+            (NativeHost.MacOS, "arm64") => "osx-arm64",
             _ => ""
         };
         if (plugin.Length == 0)
         {
-            reason = "请选择有效的系统。";
+            reason = "当前运行系统不支持手工打包。";
+            return false;
+        }
+        if (runtime.Length == 0)
+        {
+            reason = SelectedArchitecture.Length == 0
+                ? "当前运行进程架构不支持发布。"
+                : $"当前主机不支持在此执行 {SelectedSystem} {SelectedArchitecture} 原生发布。";
             return false;
         }
         if (!TaskCatalog.Get(plugin).Supports(TaskCatalog.Host, runtime))
         {
-            reason = SelectedSystem == "Windows" && SelectedArchitecture == "arm64"
-                ? "当前 Windows 发布脚本及随包原生依赖仅支持 x64。"
-                : $"当前主机不支持在此执行 {SelectedSystem} {SelectedArchitecture} 发布。";
+            reason = $"当前发布脚本不支持 {SelectedSystem} {SelectedArchitecture} 目标。";
             return false;
         }
         reason = "";
         return true;
     }
 
-    private void SourceDirectoryChanged(string _) => OnPropertyChanged(nameof(SourceDirectory));
+    private void PublishConfigurationChanged() => Dispatcher.UIThread.Post(() =>
+    {
+        RefreshVersions();
+    });
 
-    private void PublishConfigurationChanged() => Dispatcher.UIThread.Post(() => OnPropertyChanged(nameof(OutputDirectory)));
+    private void RefreshVersions()
+    {
+        if (!TryGetPluginSelection(out var plugin, out var runtime, out var reason))
+        {
+            CurrentVersion = "";
+            NextVersion = "";
+            VersionSourceStatus = reason;
+            return;
+        }
 
-    partial void OnPublishAotChanged(bool value) => OnPropertyChanged(nameof(SelectionStatus));
+        try
+        {
+            var outputRoot = TaskCatalog.GetDesktopOutputRoot(plugin, DesktopScriptsDirectory, runtime);
+            var versions = PackagingVersionReader.GetLatestPatchVersions(outputRoot);
+            if (versions is null)
+            {
+                CurrentVersion = "";
+                NextVersion = "";
+                VersionSourceStatus = "未找到历史增量包，请先完成一次发布；版本号将从最新增量包文件名自动读取。";
+                return;
+            }
 
-    partial void OnSigningIdentityChanged(string value) => OnPropertyChanged(nameof(SelectionStatus));
+            CurrentVersion = versions.Value.CurrentVersion;
+            NextVersion = versions.Value.NextVersion;
+            VersionSourceStatus = "已从最近输出的增量包自动读取当前版本，并计算下次版本。";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or
+            InvalidDataException or ArgumentException or NotSupportedException)
+        {
+            CurrentVersion = "";
+            NextVersion = "";
+            VersionSourceStatus = "自动读取版本失败：" + ex.Message;
+        }
+    }
+
+    public async Task RunAfterConfirmationAsync()
+    {
+        IsConfirmed = true;
+        try { await RunCommand.ExecuteAsync(null); }
+        finally { IsConfirmed = false; }
+    }
 
     [RelayCommand]
     private async Task RunAsync()
@@ -194,8 +200,6 @@ public partial class MainViewModel : ViewModelBase
             var next = ParseVersion(NextVersion, "目标版本");
             if (next < current)
                 throw new InvalidOperationException("目标版本不能小于当前版本；版本相同时将跳过升级包生成，只打包安装包。");
-            if (OssHost.Length > 2048 || System.Linq.Enumerable.Any(OssHost, char.IsControl))
-                throw new ArgumentException("Invalid OSS address.");
 
             var sourceRoot = PackagingPathProvider.ResolveRepositoryRoot(SourceDirectory);
             if (!Directory.Exists(sourceRoot)) throw new DirectoryNotFoundException("源码仓库目录不存在：" + sourceRoot);
@@ -212,7 +216,7 @@ public partial class MainViewModel : ViewModelBase
                     _ => "upgrade-installer"
                 };
                 var command = TaskCatalog.Get(plugin).Prepare(new PluginRequest(plugin, scriptsRoot, runtime,
-                    CurrentVersion.Trim(), NextVersion.Trim(), OssHost.Trim(), SourceDirectory, packageType, PublishAot,
+                    CurrentVersion.Trim(), NextVersion.Trim(), "", SourceDirectory, packageType, PublishAot,
                     SigningIdentity.Trim(), NotaryKeychainProfile.Trim()));
                 IsRunning = true; IsConfirmed = false;
                 _cancellation = new CancellationTokenSource();
@@ -257,21 +261,6 @@ public partial class MainViewModel : ViewModelBase
             environment: new Dictionary<string, string?>
             {
                 ["CLIENT_PUBLISH_SOURCE_DIRECTORY"] = sourceDirectory
-            });
-    }
-
-    private Task<int> RunPowerShellScriptAsync(string scriptPath, IProgress<string> progress,
-        CancellationToken cancellationToken)
-    {
-        var fullArguments = new List<string> { "-NoProfile" };
-        if (OperatingSystem.IsWindows()) fullArguments.AddRange(["-ExecutionPolicy", "Bypass"]);
-        fullArguments.AddRange(["-File", scriptPath, "-CurrentVersion", CurrentVersion.Trim(), "-NextVersion", NextVersion.Trim()]);
-        if (!string.IsNullOrWhiteSpace(OssHost)) fullArguments.AddRange(["-OssHost", OssHost.Trim()]);
-        return _runner.RunProcessAsync(PowerShellTaskRunner.ResolvePowerShell(), fullArguments,
-            Path.GetDirectoryName(scriptPath)!, progress, cancellationToken, interactive: true,
-            environment: new Dictionary<string, string?>
-            {
-                ["CLIENT_PUBLISH_SOURCE_DIRECTORY"] = SourceDirectory
             });
     }
 

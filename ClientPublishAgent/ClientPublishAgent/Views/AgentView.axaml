@@ -169,7 +169,6 @@
                                                     <MenuFlyout Placement="Bottom">
                                                         <MenuItem Header="重命名" Click="RenameSessionClicked" />
                                                         <MenuItem Header="永久删除" Click="DeleteSessionClicked" />
-                                                        <MenuItem Header="恢复原 Agent 配置" Click="RestoreBoundProfileClicked" />
                                                     </MenuFlyout>
                                                 </Button.Flyout>
                                             </Button>
@@ -229,7 +228,6 @@
                                 <TextBlock Text="{Binding CapabilityCatalog}" TextWrapping="Wrap" />
                             </StackPanel>
                         </Expander>
-                        <TextBlock TextWrapping="Wrap" Text="仅允许 HTTPS 或本机回环 HTTP。密钥从环境变量读取，不保存在应用中。发送消息后，对话会发送到配置的服务，请勿输入敏感信息。" />
                     </StackPanel>
                 </ScrollViewer>
             </Border>

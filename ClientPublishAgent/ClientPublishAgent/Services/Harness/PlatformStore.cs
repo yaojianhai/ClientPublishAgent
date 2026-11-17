@@ -168,7 +168,7 @@ public sealed class PlatformStore
         }
         return JsonSerializer.SerializeToElement(Scrub(JsonNode.Parse(state.GetRawText())), PlatformJsonContext.Default.JsonNode);
     }
-    public void Save(StoredConversation conversation)
+    public void Save(StoredConversation conversation, bool updateTimestamp = true)
     {
         if (conversation.Session.ValueKind != JsonValueKind.Object) throw new InvalidDataException("A real serialized AgentSession is required.");
         if (conversation.ProfileSnapshot is { } snapshot)
@@ -184,7 +184,8 @@ public sealed class PlatformStore
                 Messages = conversation.Messages?.Select(m => m with { Title = Redact(m.Title, key), Text = Redact(m.Text, key) }).ToArray(),
                 Session = RedactState(conversation.Session, key) };
         }
-        AtomicWrite(SessionPath(conversation.Id), conversation with { Updated = DateTimeOffset.UtcNow }, PlatformJsonContext.Default.StoredConversation);
+        AtomicWrite(SessionPath(conversation.Id), updateTimestamp ? conversation with { Updated = DateTimeOffset.UtcNow } : conversation,
+            PlatformJsonContext.Default.StoredConversation);
     }
     public StoredConversation Load(Guid id)
     {
@@ -230,7 +231,7 @@ public sealed class PlatformStore
     public static void ValidateBinding(StoredConversation session, AgentProfile profile)
     {
         if (session.ProfileId != profile.Id || session.Binding != profile.Binding)
-            throw new InvalidOperationException("历史会话绑定的 Agent 配置不同。请恢复原配置，或创建新会话；不会将历史发送给其他模型。");
+            throw new InvalidOperationException("历史会话绑定的 Agent 配置不同。请切换到与此会话绑定一致的 Agent 配置，或创建新会话；不会将历史发送给其他模型。");
     }
     private string SessionPath(Guid id) => Path.Combine(_root, id.ToString("N") + ".session.json");
     private static void AtomicWrite<T>(string path, T data, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo)

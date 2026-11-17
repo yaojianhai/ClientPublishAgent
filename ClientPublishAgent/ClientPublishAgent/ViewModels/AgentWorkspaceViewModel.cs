@@ -184,28 +184,10 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 	private bool RequireStore()
 	{
 		if (_store is not null) return true;
-		Status = "本地缓存不可用：无法保存、新增、删除或恢复配置/会话；不会覆盖损坏数据。请修复缓存后重启。";
+		Status = "本地缓存不可用：无法保存、新增、删除或恢复会话；不会覆盖损坏数据。请修复缓存后重启。";
 		return false;
 	}
 	[RelayCommand] private void RefreshSessions() => RefreshHistory();
-	[RelayCommand]
-	private void RestoreBoundProfile()
-	{
-		if (!RequireStore() || !CanEditSettings || SelectedSession is null) return;
-		try
-		{
-			var session = _store!.Load(SelectedSession.Id);
-			var original = session.ProfileSnapshot ?? throw new InvalidOperationException("此会话没有绑定配置快照，请手工恢复原配置。");
-			PlatformStore.ValidateBinding(session, original);
-			var next = Profiles.Where(p => p.Id != original.Id).Append(original).ToList();
-			_store.SaveProfiles(next, original.Id);
-			Profiles.Clear(); foreach (var p in next) Profiles.Add(p);
-			SelectedProfile = original;
-			SelectedSession = session;
-			Status = "已用此历史快照替换该 Agent 当前配置（只含密钥变量名）。其他历史需分别恢复其原配置；请点击恢复上下文。";
-		}
-		catch (Exception ex) { Status = "恢复绑定配置失败：" + ex.Message; }
-	}
 	[RelayCommand]
 	private void RenameSession()
 	{
@@ -280,7 +262,7 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 		SelectedSession = session;
 		if (IsConnected)
 		{
-			await DisconnectAsync();
+			await DisconnectCoreAsync(updateHistoryOrder: false);
 			if (IsConnected) return;
 		}
 		await OpenAsync(true);
@@ -410,7 +392,7 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 			else if (!string.IsNullOrEmpty(stored?.Transcript))
 				ChatItems.Add(new ChatEntryViewModel(this, "notice", ChatText.History, stored.Transcript));
 			IsConnected = true;
-			if (stored is not null) await SaveCurrentAsync();
+			if (stored is not null) await SaveCurrentAsync(updateHistoryOrder: false);
 			else
 			{
 				UpdateWorkspaceDetails(await _workspace.SerializeAsync());
@@ -631,14 +613,16 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 	}
 
 	[RelayCommand]
-	private async Task DisconnectAsync()
+	private async Task DisconnectAsync() => await DisconnectCoreAsync(updateHistoryOrder: true);
+
+	private async Task DisconnectCoreAsync(bool updateHistoryOrder)
 	{
 		if (!CanDisconnect || _workspace is null) return;
 		IsBusy = true;
 		try
 		{
 			if (_workspace.HasBackgroundWork) _restoredUnresolved = true;
-			await _workspace.StopBackgroundAsync(); await SaveCurrentAsync();
+			await _workspace.StopBackgroundAsync(); await SaveCurrentAsync(updateHistoryOrder);
 		}
 		catch (Exception ex) { Status = "保存失败，未断开：" + ex.Message; return; }
 		finally { IsBusy = false; }
@@ -652,7 +636,7 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 		Status = "已断开；历史已保留，可选择恢复或新建。";
 	}
 
-	private async Task SaveCurrentAsync()
+	private async Task SaveCurrentAsync(bool updateHistoryOrder = true)
 	{
 		if (_workspace is null || _current is null) return;
 		if (_needsInitialTitle && !ChatItems.Any(c => c.Role == "user")) return;
@@ -665,8 +649,8 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 		Conversation = TrimLog(transcript); TaskLog = TrimLog(log);
 		_current = _current with { Session = state, Transcript = transcript, Log = log,
 			Messages = ChatItems.Select(c => c.Snapshot()).Select(m => m with { Title = _workspace.RedactLocal(m.Title), Text = _workspace.RedactLocal(m.Text) }).ToArray(),
-			UnsafeToResume = unsafeState, Updated = DateTimeOffset.UtcNow };
-		_store!.Save(_current);
+			UnsafeToResume = unsafeState, Updated = updateHistoryOrder ? DateTimeOffset.UtcNow : _current.Updated };
+		_store!.Save(_current, updateHistoryOrder);
 		UpdateWorkspaceDetails(state);
 		RefreshHistory();
 	}

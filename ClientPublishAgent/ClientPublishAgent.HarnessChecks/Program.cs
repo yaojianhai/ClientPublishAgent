@@ -1,10 +1,9 @@
 ﻿using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
-using System.Text.Json.Serialization.Metadata;
 using ClientPublishAgent.Services;
 using ClientPublishAgent.Services.Harness;
 using ClientPublishAgent.ViewModels;
@@ -39,6 +38,16 @@ try
         Console.WriteLine("Desktop output root checks passed.");
         return;
     }
+    if (args.Contains("--packaging-target", StringComparer.Ordinal))
+    {
+        await CheckPackagingTargetAsync();
+        return;
+    }
+    if (args.Contains("--packaging-version", StringComparer.Ordinal))
+    {
+        CheckPackagingVersionReader(root);
+        return;
+    }
     if (args.Contains("--packaging-ui", StringComparer.Ordinal))
     {
         await CheckPackagingUiAsync(ct);
@@ -60,6 +69,12 @@ try
     if (args.Contains("--chat-ui", StringComparer.Ordinal))
     {
         await CheckChatInteractionAsync(model, root, keyName, ct);
+        model.AssertHealthy();
+        return;
+    }
+    if (args.Contains("--history-order", StringComparer.Ordinal))
+    {
+        await CheckChatInteractionAsync(model, root, keyName, ct, historyOrderOnly: true);
         model.AssertHealthy();
         return;
     }
@@ -234,6 +249,67 @@ finally
         Console.WriteLine("Packaging window visibility checks passed.");
     }
 
+    static async Task CheckPackagingTargetAsync()
+    {
+        var viewModel = new MainViewModel();
+        try
+        {
+            var expectedSystem = TaskCatalog.Host switch
+            {
+                NativeHost.Windows => "Windows",
+                NativeHost.MacOS => "macOS",
+                _ => "Linux"
+            };
+            var expectedArchitecture = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture switch
+            {
+                System.Runtime.InteropServices.Architecture.X64 => "x64",
+                System.Runtime.InteropServices.Architecture.Arm64 => "arm64",
+                _ => "x64"
+            };
+            Check(viewModel.SelectedSystem == expectedSystem, "manual packaging system is fixed to the current host");
+            Check(viewModel.SelectedArchitecture == expectedArchitecture && viewModel.Architectures.SequenceEqual(["x64", "arm64"]),
+                "manual packaging offers mainstream architectures and defaults to the current host");
+            var alternateArchitecture = expectedArchitecture == "x64" ? "arm64" : "x64";
+            viewModel.SelectedArchitecture = alternateArchitecture;
+            Check(viewModel.SelectedArchitecture == alternateArchitecture, "manual packaging architecture can be selected");
+            Console.WriteLine("Manual packaging native target checks passed.");
+        }
+        finally { await viewModel.CloseAsync(); }
+    }
+
+    static void CheckPackagingVersionReader(string root)
+    {
+        var outputRoot = Path.Combine(root, "packaging-version-output");
+        var patchDirectory = Path.Combine(outputRoot, "OutputPatchPackage");
+        Directory.CreateDirectory(patchDirectory);
+        Check(PackagingVersionReader.GetLatestPatchVersions(outputRoot) is null,
+            "packaging version reader reports no prior patch output");
+        Check(PackagingVersionReader.IncrementVersion("1.0.99") == "1.1.0" &&
+            PackagingVersionReader.IncrementVersion("1.99.99") == "2.0.0",
+            "packaging version increment carries at 100 across version segments");
+
+        var olderPatch = Path.Combine(patchDirectory, "patch_v1.0.98_to_v1.0.99.zip");
+        var latestPatch = Path.Combine(patchDirectory, "patch_v1.0.99_to_v1.1.0.zip");
+        File.WriteAllBytes(olderPatch, []);
+        File.WriteAllBytes(latestPatch, []);
+        File.SetLastWriteTimeUtc(olderPatch, DateTime.UtcNow.AddMinutes(-2));
+        File.SetLastWriteTimeUtc(latestPatch, DateTime.UtcNow);
+        var versions = PackagingVersionReader.GetLatestPatchVersions(outputRoot);
+        Check(versions == ("1.1.0", "1.1.1"),
+            "packaging version reader uses the target version from the most recently written patch zip");
+
+        var invalidPatch = Path.Combine(patchDirectory, "patch_v1.1.99_to_v1.1.100.zip");
+        File.WriteAllBytes(invalidPatch, []);
+        File.SetLastWriteTimeUtc(invalidPatch, DateTime.UtcNow.AddMinutes(1));
+        try
+        {
+            PackagingVersionReader.GetLatestPatchVersions(outputRoot);
+            throw new InvalidOperationException("FAIL: invalid package version was accepted");
+        }
+        catch (InvalidDataException) { }
+        Console.WriteLine("Packaging version reader checks passed.");
+    }
+
     static async Task CheckInteractiveTasksAsync(FakeModel model, string root, string keyName, CancellationToken ct)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -343,7 +419,7 @@ finally
         while (!output.Text.Contains(text, StringComparison.OrdinalIgnoreCase)) await Task.Delay(20, ct);
     }
 
-    static async Task CheckChatInteractionAsync(FakeModel model, string root, string keyName, CancellationToken ct)
+    static async Task CheckChatInteractionAsync(FakeModel model, string root, string keyName, CancellationToken ct, bool historyOrderOnly = false)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -413,6 +489,36 @@ finally
                         Check(ui.IsConnected && ui.CanSend && ui.CanType && ui.CanEditSettings && ui.Sessions.Count == 0,
                             "startup initializes an editable conversation without creating empty history");
                         Check(ui.ModeText == "自动执行", "startup uses execute mode (shown as " + ui.ModeText + ")");
+                        if (historyOrderOnly)
+                        {
+                            model.EnqueueText("first ordered reply");
+                            ui.Input = "first ordered conversation";
+                            await ui.SendCommand.ExecuteAsync(null);
+                            var earlierSessionId = ui.SelectedSession!.Id;
+                            model.EnqueueText("second turn reply");
+                            ui.Input = "second turn question";
+                            await ui.SendCommand.ExecuteAsync(null);
+                            var savedConversation = store.Load(earlierSessionId);
+                            Check(savedConversation.Messages is { Count: 4 } messages &&
+                                messages[0].Text == "first ordered conversation" && messages[1].Text == "first ordered reply" &&
+                                messages[2].Text == "second turn question" && messages[3].Text == "second turn reply",
+                                "history persistence retains every user and assistant turn");
+                            await ui.NewConversationCommand.ExecuteAsync(null);
+                            model.EnqueueText("second ordered reply");
+                            ui.Input = "second ordered conversation";
+                            await ui.SendCommand.ExecuteAsync(null);
+                            var historyOrderBeforeSwitch = ui.Sessions.Select(s => s.Id).ToArray();
+                            var earlierSession = ui.Sessions.Single(s => s.Id == earlierSessionId);
+                            await ui.SwitchToSessionAsync(earlierSession);
+                            Check(ui.SelectedSession?.Id == earlierSessionId && ui.Sessions.Select(s => s.Id).SequenceEqual(historyOrderBeforeSwitch),
+                                "opening a history item does not reorder the history list");
+                            Check(ui.ChatItems.Count == 4 && ui.ChatItems[0].Text == "first ordered conversation" &&
+                                ui.ChatItems[1].Text == "first ordered reply" && ui.ChatItems[2].Text == "second turn question" &&
+                                ui.ChatItems[3].Text == "second turn reply",
+                                "restoring history displays every saved user and assistant turn");
+                            completion.TrySetResult();
+                            return;
+                        }
                         ui.Model = "startup-selected-model";
                         Check(view.FindControl<Button>("NewConversationButton")!.IsEnabled,
                             "new-conversation button remains clickable in an untouched workspace");
@@ -505,6 +611,11 @@ finally
                         await ui.SendCommand.ExecuteAsync(null);
                         Check(!ui.ChatItems.Last().Text.Contains("local-test-key"), "message rendering redacts credentials spanning stream chunks");
                         var saved = store.Load(ui.SelectedSession!.Id);
+                        var current = typeof(AgentWorkspaceViewModel).GetField("_current", BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(ui) as StoredConversation;
+                        Check(current?.Id == saved.Id,
+                            $"selected history points to the live conversation (selected {saved.Id}; current {current?.Id})");
+                        Check(saved.Messages?.Count == ui.ChatItems.Count,
+                            $"latest cache includes all visible messages (cache {saved.Messages?.Count}; visible {ui.ChatItems.Count}; status: {ui.Status})");
                         Check(saved.Messages is not null && !JsonSerializer.Serialize(saved.Messages).Contains("local-test-key"), "structured history is persisted and redacted");
                         await ui.DisconnectCommand.ExecuteAsync(null);
                         ui.SelectedSession = ui.Sessions.Single(s => s.Id == saved.Id);
@@ -955,10 +1066,9 @@ finally
         store.Save(snapshot);
         ui.EnableAutoMemory = false; ui.EnableAutoSkills = false; ui.EnableWebSearch = false; ui.SearchEndpoint = "";
         ui.SaveProfileCommand.Execute(null);
-        ui.SelectedSession = store.Load(snapshot.Id);
-        ui.RestoreBoundProfileCommand.Execute(null);
-        Check(ui.EnableAutoMemory && ui.EnableAutoSkills && ui.EnableWebSearch && ui.SearchEndpoint == search.Endpoint &&
-            store.LoadProfiles().Single().Binding == profile.Binding, "snapshot restore restores original automatic/search config and binding");
+        Check(!ui.EnableAutoMemory && !ui.EnableAutoSkills && !ui.EnableWebSearch && ui.SearchEndpoint == "" &&
+            store.Load(snapshot.Id).ProfileSnapshot?.Binding == profile.Binding,
+            "history retains its profile snapshot without restoring it into the active configuration");
         var legacyStore = new PlatformStore(Path.Combine(root, "legacy-automatic-cache"));
         File.WriteAllText(Path.Combine(legacyStore.Root, "profiles.json"), JsonSerializer.Serialize(new { Version = 1, Profiles = new[] { legacy.ProfileSnapshot }, SelectedProfileId = legacy.ProfileId }));
         legacyStore.Save(legacy);
@@ -1086,15 +1196,15 @@ finally
         var oldProfile = profile with { Model = "old-model" };
         var oldSession = healthy with { Id = Guid.NewGuid(), Binding = oldProfile.Binding, ProfileSnapshot = oldProfile };
         store.Save(oldSession);
-        recovered.SelectedSession = store.Load(oldSession.Id);
-        recovered.RestoreBoundProfileCommand.Execute(null);
-        Check(recovered.SelectedProfile?.Model == "old-model" && recovered.Status.Contains("替换") &&
-            recovered.Status.Contains("其他历史需分别"), "snapshot restore explicitly warns of replacing current configuration");
-        recovered.SelectedSession = store.Load(healthy.Id);
-        recovered.RestoreBoundProfileCommand.Execute(null);
-        Check(store.LoadProfiles().Single().Binding == profile.Binding &&
-            store.Load(oldSession.Id).ProfileSnapshot?.Binding == oldProfile.Binding,
-            "same-id snapshots remain separately restorable without binding scheme changes");
+        var storedOldSession = store.Load(oldSession.Id);
+        try
+        {
+            PlatformStore.ValidateBinding(storedOldSession, profile);
+            throw new InvalidOperationException("FAIL: changed profile must not resume a bound session");
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("绑定的 Agent 配置不同")) { }
+        Check(storedOldSession.ProfileSnapshot?.Binding == oldProfile.Binding,
+            "historical profile snapshots remain metadata while changed bindings stay blocked");
 
         var profilesPath = Path.Combine(store.Root, "profiles.json");
         File.Delete(profilesPath);
@@ -1102,10 +1212,6 @@ finally
         recovered.NewProfileCommand.Execute(null);
         Check(recovered.Profiles.Count == 1 && recovered.SelectedProfile?.Id == profile.Id &&
             recovered.Status.Contains("新增配置失败"), "failed new-profile save never adds ghost profile");
-        recovered.SelectedSession = store.Load(oldSession.Id);
-        recovered.RestoreBoundProfileCommand.Execute(null);
-        Check(recovered.SelectedProfile?.Binding == profile.Binding && recovered.Status.Contains("恢复绑定配置失败"),
-            "failed snapshot save does not replace current in-memory profile");
         Directory.Delete(profilesPath);
         File.WriteAllText(profilesPath, "{broken-profiles");
         var unavailable = new AgentWorkspaceViewModel(store);
@@ -1114,7 +1220,7 @@ finally
         foreach (var command in new CommunityToolkit.Mvvm.Input.IRelayCommand[]
         {
             unavailable.SaveProfileCommand, unavailable.NewProfileCommand, unavailable.DeleteProfileCommand,
-            unavailable.RestoreBoundProfileCommand, unavailable.DeleteSessionCommand, unavailable.RenameSessionCommand,
+            unavailable.DeleteSessionCommand, unavailable.RenameSessionCommand,
             unavailable.RefreshSessionsCommand
         })
         {
@@ -1153,9 +1259,10 @@ finally
 
     static void CheckRequestSourceAttributionSerialization()
     {
-        var options = new JsonSerializerOptions(AIJsonUtilities.DefaultOptions);
-        options.Converters.Add(new RequestAttributionJsonConverter());
-        options.TypeInfoResolverChain.Add(new RequestAttributionTypeInfoResolver());
+        var factory = typeof(HarnessWorkspace).GetMethod("CreateSessionSerializerOptions", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Session serializer options factory not found.");
+        var options = factory.Invoke(null, null) as JsonSerializerOptions
+            ?? throw new InvalidOperationException("Session serializer options were not created.");
         var message = new ChatMessage(ChatRole.Assistant, "answer")
         {
             AdditionalProperties = new AdditionalPropertiesDictionary
@@ -1178,9 +1285,25 @@ finally
     {
         using var workspace = new HarnessWorkspace(new HarnessSettings(model.Endpoint, "fake-model", keyName, root), _ => { });
         await workspace.InitializeAsync(ct);
+        var session = typeof(HarnessWorkspace).GetField("_session", BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(workspace) as AgentSession
+            ?? throw new InvalidOperationException("Harness session was not initialized.");
+        var agent = typeof(HarnessWorkspace).GetField("_agent", BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(workspace) as AIAgent
+            ?? throw new InvalidOperationException("Harness agent was not initialized.");
+        var history = agent.GetService<InMemoryChatHistoryProvider>()
+            ?? throw new InvalidOperationException("In-memory chat history provider was not registered.");
+        history.GetMessages(session).Add(new ChatMessage(ChatRole.Assistant, "attributed response")
+        {
+            AdditionalProperties = new AdditionalPropertiesDictionary
+            {
+                [AgentRequestMessageSourceAttribution.AdditionalPropertiesKey] = new AgentRequestMessageSourceAttribution(AgentRequestMessageSourceType.ChatHistory, "history")
+            }
+        });
         var state = await workspace.SerializeAsync(ct);
         Check(state.GetProperty("stateBag").GetProperty("AgentModeProvider")
             .GetProperty("currentMode").GetString() == "execute", "session serialization works with reflection disabled");
+        Check(state.GetProperty("stateBag").GetProperty("InMemoryChatHistoryProvider").GetProperty("messages")[0]
+            .GetProperty("additionalProperties").GetProperty(AgentRequestMessageSourceAttribution.AdditionalPropertiesKey).GetProperty("sourceId").GetString() == "history",
+            "session serializes attributed chat messages with production options");
     }
 
     static async Task CheckPlatformAsync(FakeModel model, ConcurrentQueue<string> output, string root, string keyName, CancellationToken ct)
@@ -1447,9 +1570,9 @@ finally
         ui.SelectedSession = ui.Sessions.Single();
         await ui.RestoreSessionCommand.ExecuteAsync(null);
         Check(!ui.IsConnected && ui.Status.Contains("绑定"), "UI rejects wrong-model history restore before network");
+        ui.Model = profile.Model;
+        ui.SaveProfileCommand.Execute(null);
         ui.SelectedSession = ui.Sessions.Single();
-        ui.RestoreBoundProfileCommand.Execute(null);
-        Check(ui.Model == profile.Model, "historical nonsecret profile snapshot can restore original configuration");
         await ui.RestoreSessionCommand.ExecuteAsync(null);
         Check(ui.IsConnected && ui.Sessions.Single().Id == uiSessionId, "UI selection restores same persisted session");
         Check(await ui.CloseAsync(), "window close cancels and safely persists session");
@@ -1817,54 +1940,5 @@ sealed class FakeModel : IAsyncDisposable
         listener.Close();
         try { await server; }
         finally { stop.Dispose(); }
-    }
-}
-
-sealed class RequestAttributionTypeInfoResolver : IJsonTypeInfoResolver
-{
-    public JsonTypeInfo? GetTypeInfo(Type type, JsonSerializerOptions options) =>
-        type == typeof(AgentRequestMessageSourceAttribution)
-            ? JsonTypeInfo.CreateJsonTypeInfo<AgentRequestMessageSourceAttribution>(options)
-            : null;
-}
-
-sealed class RequestAttributionJsonConverter : JsonConverter<AgentRequestMessageSourceAttribution>
-{
-    public override AgentRequestMessageSourceAttribution Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
-    {
-        using var document = JsonDocument.ParseValue(ref reader);
-        var root = document.RootElement;
-        var sourceTypeName = options.PropertyNamingPolicy?.ConvertName(nameof(AgentRequestMessageSourceAttribution.SourceType)) ?? nameof(AgentRequestMessageSourceAttribution.SourceType);
-        var sourceIdName = options.PropertyNamingPolicy?.ConvertName(nameof(AgentRequestMessageSourceAttribution.SourceId)) ?? nameof(AgentRequestMessageSourceAttribution.SourceId);
-        var valueName = options.PropertyNamingPolicy?.ConvertName(nameof(AgentRequestMessageSourceType.Value)) ?? nameof(AgentRequestMessageSourceType.Value);
-        if (!root.TryGetProperty(sourceTypeName, out var sourceTypeJson) || !root.TryGetProperty(sourceIdName, out var sourceIdJson))
-            throw new JsonException("Invalid request message source attribution.");
-
-        var sourceTypeValue = sourceTypeJson.ValueKind switch
-        {
-            JsonValueKind.String => sourceTypeJson.GetString(),
-            JsonValueKind.Object when sourceTypeJson.TryGetProperty(valueName, out var valueJson) => valueJson.GetString(),
-            _ => null
-        };
-        var sourceId = sourceIdJson.GetString();
-        if (string.IsNullOrEmpty(sourceTypeValue) || sourceId is null)
-            throw new JsonException("Invalid request message source attribution.");
-
-        return new AgentRequestMessageSourceAttribution(new AgentRequestMessageSourceType(sourceTypeValue), sourceId);
-    }
-
-    public override void Write(Utf8JsonWriter writer, AgentRequestMessageSourceAttribution value, JsonSerializerOptions options)
-    {
-        var sourceTypeName = options.PropertyNamingPolicy?.ConvertName(nameof(value.SourceType)) ?? nameof(value.SourceType);
-        var sourceIdName = options.PropertyNamingPolicy?.ConvertName(nameof(value.SourceId)) ?? nameof(value.SourceId);
-        var valueName = options.PropertyNamingPolicy?.ConvertName(nameof(value.SourceType.Value)) ?? nameof(value.SourceType.Value);
-
-        writer.WriteStartObject();
-        writer.WritePropertyName(sourceTypeName);
-        writer.WriteStartObject();
-        writer.WriteString(valueName, value.SourceType.Value);
-        writer.WriteEndObject();
-        writer.WriteString(sourceIdName, value.SourceId);
-        writer.WriteEndObject();
     }
 }

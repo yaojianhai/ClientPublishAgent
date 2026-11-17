@@ -155,7 +155,7 @@ public partial class AgentView : UserControl
 		var error = new TextBlock { TextWrapping = Avalonia.Media.TextWrapping.Wrap };
 		var dialog = new Window
 		{
-			Title = "重命名历史会话",
+			Title = "重命名历史会�?",
 			Width = 400,
 			Height = 190,
 			CanResize = false,
@@ -189,7 +189,7 @@ public partial class AgentView : UserControl
 		};
 		if (TopLevel.GetTopLevel(this) is not Window owner)
 		{
-			viewModel.Status = "无法打开重命名窗口。";
+			viewModel.Status = "无法打开重命名窗口�??";
 			return;
 		}
 		await dialog.ShowDialog(owner);
@@ -201,13 +201,6 @@ public partial class AgentView : UserControl
 		if (sender is not MenuItem { DataContext: StoredConversation session } || DataContext is not AgentWorkspaceViewModel viewModel) return;
 		viewModel.SelectedSession = session;
 		await viewModel.DeleteSessionAsync(session);
-	}
-
-	private void RestoreBoundProfileClicked(object? sender, RoutedEventArgs e)
-	{
-		if (sender is not MenuItem { DataContext: StoredConversation session } || DataContext is not AgentWorkspaceViewModel viewModel) return;
-		viewModel.SelectedSession = session;
-		viewModel.RestoreBoundProfileCommand.Execute(null);
 	}
 
 	private async void ChatInputKeyDown(object? sender, KeyEventArgs e)

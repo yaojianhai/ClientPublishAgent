@@ -30,7 +30,10 @@ public sealed record HarnessApproval(Guid Id, string Task, string CurrentVersion
 public sealed record HarnessResult(string Text, IReadOnlyList<HarnessApproval> Approvals);
 
 [JsonSourceGenerationOptions(GenerationMode = JsonSourceGenerationMode.Metadata)]
+[JsonSerializable(typeof(ChatMessage))]
+[JsonSerializable(typeof(InMemoryChatHistoryProvider.State))]
 [JsonSerializable(typeof(AgentRequestMessageSourceAttribution))]
+[JsonSerializable(typeof(JsonElement))]
 internal partial class HarnessSessionJsonContext : JsonSerializerContext
 {
 }
@@ -45,6 +48,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
         ["upgrade"] = "upgrade-win-x64.ps1"
     };
     private static readonly JsonSerializerOptions SessionSerializerOptions = CreateSessionSerializerOptions();
+    private static readonly JsonSerializerOptions ChatHistorySerializerOptions = CreateChatHistorySerializerOptions();
     private readonly HarnessSettings _settings;
     private readonly Action<string> _output;
     private readonly SemaphoreSlim _mutex = new(1, 1);
@@ -74,10 +78,15 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
         var agentOptions = GetAgentJsonSerializerOptions();
         var agentResolver = agentOptions.TypeInfoResolver
             ?? throw new InvalidOperationException("Agent JSON metadata resolver is unavailable.");
-        var options = new JsonSerializerOptions(agentOptions)
-        {
-            TypeInfoResolver = JsonTypeInfoResolver.Combine(agentResolver, new HarnessSessionJsonContext())
-        };
+        var options = new JsonSerializerOptions(agentOptions);
+        options.TypeInfoResolver = JsonTypeInfoResolver.Combine(agentResolver, new HarnessSessionJsonContext());
+        return options;
+    }
+
+    private static JsonSerializerOptions CreateChatHistorySerializerOptions()
+    {
+        var options = new JsonSerializerOptions(AIJsonUtilities.DefaultOptions);
+        options.TypeInfoResolverChain.Add(new HarnessSessionJsonContext(options));
         return options;
     }
 
@@ -217,7 +226,10 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
             MaxContextWindowTokens = settings.Profile?.Compaction == true ? settings.Profile.ContextTokens : null,
             MaxOutputTokens = settings.Profile?.Compaction == true ? settings.Profile.OutputTokens : null,
             BackgroundAgents = background,
-            ChatHistoryProvider = new InMemoryChatHistoryProvider(),
+            ChatHistoryProvider = new InMemoryChatHistoryProvider(new InMemoryChatHistoryProviderOptions
+            {
+                JsonSerializerOptions = ChatHistorySerializerOptions
+            }),
             AIContextProviders = contextProviders,
             FileAccessStore = settings.Profile?.Files == true ? new FileSystemAgentFileStore(settings.Profile.WorkspaceRoot) : null,
             FileAccessProviderOptions = new FileAccessProviderOptions
