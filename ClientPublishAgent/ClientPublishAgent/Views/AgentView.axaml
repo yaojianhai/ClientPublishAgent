@@ -206,7 +206,7 @@
                             <StackPanel Spacing="6">
                                 <StackPanel IsEnabled="{Binding CanEditSettings}">
                                     <CheckBox IsChecked="{Binding EnableFiles}"><TextBlock Text="工作区文件读写 / 文件传输（需授权）" TextWrapping="Wrap" /></CheckBox>
-                                    <CheckBox IsChecked="{Binding EnableTerminal}"><TextBlock Text="终端（非沙箱，需授权）" TextWrapping="Wrap" /></CheckBox>
+                                    <CheckBox IsChecked="{Binding EnableTerminal}"><TextBlock Text="终端（非沙箱，授权后输出会发送给模型）" TextWrapping="Wrap" /></CheckBox>
                                     <CheckBox IsChecked="{Binding EnablePackaging}" Content="跨平台任务插件" />
                                     <CheckBox IsChecked="{Binding EnableMemory}"><TextBlock Text="显式文件 memory（需授权，无自动加载）" TextWrapping="Wrap" /></CheckBox>
                                     <CheckBox IsChecked="{Binding EnableAutoMemory}"><TextBlock Text="自动 memory：每轮目录文本送到模型" TextWrapping="Wrap" /></CheckBox>

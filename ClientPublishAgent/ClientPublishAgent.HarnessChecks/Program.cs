@@ -90,6 +90,24 @@ try
         model.AssertHealthy();
         return;
     }
+    if (args.Contains("--platform", StringComparer.Ordinal))
+    {
+        await CheckPlatformAsync(model, output, root, keyName, ct);
+        model.AssertHealthy();
+        return;
+    }
+    if (args.Contains("--session-approval", StringComparer.Ordinal))
+    {
+        await CheckSessionApprovalAsync(model, output, root, keyName, ct);
+        model.AssertHealthy();
+        return;
+    }
+    if (args.Contains("--terminal-result", StringComparer.Ordinal))
+    {
+        await CheckTerminalResultAsync(model, output, root, keyName, ct);
+        model.AssertHealthy();
+        return;
+    }
     Check(new AgentWorkspaceViewModel(new PlatformStore(Path.Combine(root, "empty-cache"))).KeyEnvironmentVariable == "", "no default API key variable");
     CheckHistoryIsolation(root);
     CheckScriptManager();
@@ -819,7 +837,90 @@ finally
             skills.Cancel();
             Check(!skills.ApproveForSession, "cancellation clears session approval");
         }
+        using (var looping = new HarnessWorkspace(Settings(), output.Enqueue))
+        {
+            await looping.InitializeAsync(ct);
+            model.EnqueueTool("write_workspace_file", new { path = "auto-loop-0.txt", content = "0" });
+            var approval = (await looping.SendAsync("start a long tool sequence", cancellationToken: ct)).Approvals.Single();
+            for (var i = 1; i <= 9; i++)
+                model.EnqueueTool("write_workspace_file", new { path = $"auto-loop-{i}.txt", content = i.ToString() });
+            var limitText = new ConcurrentQueue<string>();
+            var result = await looping.ApproveSessionAsync(approval.Id, limitText.Enqueue, ct);
+            Check(result.Approvals.Single().Details.Contains("auto-loop-9.txt") && !looping.ApproveForSession &&
+                Enumerable.Range(0, 9).All(i => File.Exists(Path.Combine(root, $"auto-loop-{i}.txt"))) &&
+                !File.Exists(Path.Combine(root, "auto-loop-9.txt")) && string.Concat(limitText).Contains("8 次上限"),
+                "session auto-approval stops after eight tool calls and requests individual approval");
+            looping.Cancel();
+        }
         Console.WriteLine("PASS: session and one-time approvals, revocation, isolation, boundaries and native tools");
+    }
+
+    static async Task CheckTerminalResultAsync(FakeModel model, ConcurrentQueue<string> output, string root, string keyName, CancellationToken ct)
+    {
+        var profile = new AgentProfile { Name = "Terminal result", Endpoint = model.Endpoint, Model = "fake-model",
+            KeyEnvironmentVariable = keyName, WorkspaceRoot = root, Terminal = true, Files = true };
+        using var workspace = new HarnessWorkspace(new HarnessSettings(profile.Endpoint, profile.Model,
+            profile.KeyEnvironmentVariable, root, profile), output.Enqueue);
+        await workspace.InitializeAsync(ct);
+        model.EnqueueTool("run_terminal", new { command = "Write-Output 'generic-result-42'; [Environment]::OSVersion.Version.ToString()" });
+        var approval = (await workspace.SendAsync("check computer version", cancellationToken: ct)).Approvals.Single();
+        Check(approval.Details.Contains("发送给当前模型") && approval.Details.Contains("敏感信息") &&
+            !output.Any(s => s.Contains("generic-result-42")), "terminal execution and output disclosure require approval");
+        model.EnqueueText("version summarized");
+        await workspace.DecideAsync(approval.Id, true, cancellationToken: ct);
+        using (var request = JsonDocument.Parse(model.Requests.Last()))
+        {
+            var result = request.RootElement.GetProperty("messages").EnumerateArray().Last(m => m.GetProperty("role").GetString() == "tool").GetRawText();
+            Check(result.Contains("generic-result-42") && result.Contains(Environment.OSVersion.Version.ToString()) &&
+                result.Contains("Exit code: 0") && output.Any(s => s.Contains("generic-result-42")),
+                "approved arbitrary terminal output and exit code reach both model and local log");
+        }
+
+        model.EnqueueTool("run_terminal", new { command = $"Write-Output $env:{keyName}; [Console]::Error.WriteLine('failure-detail-42'); exit 7" });
+        approval = (await workspace.SendAsync("run failing command", cancellationToken: ct)).Approvals.Single();
+        model.EnqueueText("failure summarized");
+        await workspace.DecideAsync(approval.Id, true, cancellationToken: ct);
+        using (var request = JsonDocument.Parse(model.Requests.Last()))
+        {
+            var result = request.RootElement.GetProperty("messages").EnumerateArray().Last(m => m.GetProperty("role").GetString() == "tool").GetRawText();
+            Check(result.Contains("Exit code: 7") && result.Contains("failure-detail-42") && !result.Contains("local-test-key"),
+                "failure exit code and stderr reach model while configured API key is redacted");
+        }
+
+        model.EnqueueTool("run_terminal", new { command = "Write-Output 'bounded-prefix'; Write-Output ('x' * 10000)" });
+        approval = (await workspace.SendAsync("large output", cancellationToken: ct)).Approvals.Single();
+        model.EnqueueText("large output summarized");
+        await workspace.DecideAsync(approval.Id, true, cancellationToken: ct);
+        using (var request = JsonDocument.Parse(model.Requests.Last()))
+        {
+            var result = request.RootElement.GetProperty("messages").EnumerateArray().Last(m => m.GetProperty("role").GetString() == "tool").GetRawText();
+            Check(result.Contains("bounded-prefix") && result.Contains("Output truncated at 8192 characters") && result.Length < 8500,
+                "large output is bounded and explicitly marked as truncated");
+        }
+
+        var marker = Path.Combine(root, "terminal-denied.txt");
+        model.EnqueueTool("run_terminal", new { command = "Set-Content -LiteralPath 'terminal-denied.txt' -Value 'not allowed'" });
+        approval = (await workspace.SendAsync("deny command", cancellationToken: ct)).Approvals.Single();
+        model.EnqueueText("command denied");
+        await workspace.DecideAsync(approval.Id, false, cancellationToken: ct);
+        Check(!File.Exists(marker), "denied terminal command does not execute");
+
+        model.EnqueueTool("write_workspace_file", new { path = "terminal-session-approval.txt", content = "approved" });
+        approval = (await workspace.SendAsync("enable session approval", cancellationToken: ct)).Approvals.Single();
+        Check(approval.Details.Contains("后续终端命令") && approval.Details.Contains("输出发送给模型"),
+            "non-terminal approval discloses terminal output sharing before session-wide approval");
+        model.EnqueueText("session approved");
+        await workspace.ApproveSessionAsync(approval.Id, cancellationToken: ct);
+        model.EnqueueTool("run_terminal", new { command = "Write-Output 'session-terminal-result-42'" });
+        model.EnqueueText("session terminal result summarized");
+        var automatic = await workspace.SendAsync("run another command", cancellationToken: ct);
+        using (var request = JsonDocument.Parse(model.Requests.Last()))
+        {
+            var result = request.RootElement.GetProperty("messages").EnumerateArray().Last(m => m.GetProperty("role").GetString() == "tool").GetRawText();
+            Check(automatic.Approvals.Count == 0 && result.Contains("session-terminal-result-42"),
+                "session-approved terminal output reaches the model without another approval");
+        }
+        Console.WriteLine("Generic terminal result checks passed.");
     }
 
     static async Task CheckAutomaticAsync(FakeModel model, ConcurrentQueue<string> output, string root, string keyName, CancellationToken ct)
@@ -1436,13 +1537,13 @@ finally
                 approval = (await restoredApproval.SendAsync("terminal", cancellationToken: ct)).Approvals.Single();
                 model.EnqueueText("terminal done");
                 await restoredApproval.DecideAsync(approval.Id, true, cancellationToken: ct);
-                Check(output.Any(s => s.Contains("terminal-local-only")) && !model.Requests.Any(s =>
+                Check(output.Any(s => s.Contains("terminal-local-only")) && model.Requests.Any(s =>
                 {
                     using var request = JsonDocument.Parse(s);
                     return request.RootElement.GetProperty("messages").EnumerateArray().Any(m =>
                         m.GetProperty("role").GetString() == "tool" && m.GetRawText().Contains("terminal-local-only"));
                 }),
-                    "terminal output captured, not returned in tool result");
+                    "approved terminal output is returned in tool result");
                 var started = Path.Combine(root, "terminal-started");
                 model.EnqueueTool("run_terminal", new { command = "Set-Content (Join-Path (Get-Location) 'terminal-started') 'ok'; Start-Sleep -Seconds 30; Set-Content (Join-Path (Get-Location) 'terminal-finished') 'bad'" });
                 approval = (await restoredApproval.SendAsync("cancel terminal", cancellationToken: ct)).Approvals.Single();
