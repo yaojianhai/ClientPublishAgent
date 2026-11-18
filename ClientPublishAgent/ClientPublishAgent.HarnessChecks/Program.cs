@@ -32,6 +32,11 @@ try
         CheckScriptManager();
         return;
     }
+    if (args.Contains("--packaging-oss", StringComparer.Ordinal))
+    {
+        CheckPackagingOssHost(root);
+        return;
+    }
     if (args.Contains("--desktop-output", StringComparer.Ordinal))
     {
         CheckDesktopOutputRoots(root);
@@ -194,6 +199,44 @@ finally
             Directory.Delete(folder, true);
         }
         Console.WriteLine("Script manager checks passed.");
+    }
+
+    static void CheckPackagingOssHost(string root)
+    {
+        var scripts = Path.Combine(root, "oss-config", "Scripts", "Desktop");
+        var configPath = Path.Combine(scripts, "win-package", "publish-config.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
+        File.WriteAllText(configPath, JsonSerializer.Serialize(new { RootDirectory = "D:\\Publish\\win-x64", LinuxRootDirectory = "/linux", MacOSRootDirectory = "/mac" }));
+        var first = new WindowsPublishConfigStore(configPath);
+        var stale = new WindowsPublishConfigStore(configPath);
+        Check(first.OssHost == WindowsPublishConfigStore.DefaultOssHost, "legacy config defaults to public upgrade base");
+        first.SaveOssHost("  https://updates.example.test/new/path/  ");
+        stale.SaveLinuxRootDirectory("/new-linux");
+        var reloaded = new WindowsPublishConfigStore(configPath);
+        Check(reloaded.OssHost == "https://updates.example.test/new/path" && reloaded.RootDirectory == "D:\\Publish\\win-x64" &&
+            reloaded.LinuxRootDirectory == "/new-linux" && reloaded.MacOSRootDirectory == "/mac",
+            "address persists and independently saving directories preserves existing settings");
+        foreach (var runtime in new[] { "win-x64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64" })
+            Check(TaskCatalog.GetDesktopOssHost(scripts, runtime, "") == "https://updates.example.test/new/path/" + runtime,
+                "configured upgrade address includes the selected runtime: " + runtime);
+        if (OperatingSystem.IsWindows())
+        {
+            File.WriteAllText(Path.Combine(scripts, "win-package", "publish-upgrade-package-win-x64.ps1"), "");
+            var plugin = TaskCatalog.Get("windows-package").Prepare(new PluginRequest("windows-package", scripts, "win-x64", "1.0.0", "1.0.1", ""));
+            var hostArgument = plugin.Arguments.ToList().IndexOf("-OssHost");
+            Check(hostArgument >= 0 && plugin.Arguments[hostArgument + 1] == "https://updates.example.test/new/path/win-x64",
+                "manual and agent desktop plugin passes the resolved address to the script");
+        }
+        Check(TaskCatalog.GetDesktopOssHost(scripts, "linux-x64", "http://override.test/custom") == "http://override.test/custom",
+            "explicit plugin address is not modified");
+        foreach (var invalid in new[] { "", "ftp://example.test/a", "https://user:pass@example.test", "https://example.test/a?token=x", "https://example.test/linux-x64" })
+        {
+            try { reloaded.SaveOssHost(invalid); throw new Exception("FAIL: invalid upgrade base accepted: " + invalid); }
+            catch (ArgumentException) { }
+        }
+        Check(new WindowsPublishConfigStore(configPath).OssHost == "https://updates.example.test/new/path",
+            "invalid addresses do not overwrite saved configuration");
+        Console.WriteLine("Packaging upgrade address checks passed.");
     }
 
     static void CheckDesktopOutputRoots(string root)
@@ -420,6 +463,7 @@ finally
         Check(!model.Requests.Last().Contains("local-only-answer"), "interactive input is not sent to model");
         var pluginRoot = Path.Combine(root, "win-package");
         Directory.CreateDirectory(pluginRoot);
+        await File.WriteAllTextAsync(Path.Combine(root, "publish-root-config.ps1"), "", token);
         await File.WriteAllTextAsync(Path.Combine(pluginRoot, "publish-config.json"), JsonSerializer.Serialize(new { RootDirectory = root }), token);
         await File.WriteAllTextAsync(Path.Combine(pluginRoot, "publish-upgrade-package-win-x64.ps1"),
             "param($CurrentVersion,$NextVersion,$OssHost)\n$v = Read-Host 'Plugin prompt'\nSet-Content -LiteralPath 'plugin-answer.txt' -Value $v", token);

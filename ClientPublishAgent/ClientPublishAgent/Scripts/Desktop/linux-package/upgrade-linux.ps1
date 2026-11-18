@@ -18,6 +18,8 @@ $backupScript = Join-Path (Split-Path -Parent $PSScriptRoot) "backup-staging-rel
 . $backupScript
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "publish-root-config.ps1")
 $RuntimeIdentifier = Get-LinuxRuntimeIdentifier -RuntimeIdentifier $RuntimeIdentifier
+$OssHost = Resolve-DesktopOssHost -RuntimeIdentifier $RuntimeIdentifier -OssHost $OssHost
+$PSBoundParameters["OssHost"] = $OssHost
 $scriptsDirectory = Split-Path -Parent $PSScriptRoot
 $repoRoot = if ([string]::IsNullOrWhiteSpace($SourceDirectory)) { Split-Path -Parent $scriptsDirectory } else { Split-Path -Parent ([System.IO.Path]::GetFullPath($SourceDirectory)) }
 $RootDirectory = Resolve-DesktopPublishRootDirectory -RuntimeIdentifier $RuntimeIdentifier -RepositoryRoot $repoRoot -RootDirectory $RootDirectory
@@ -41,7 +43,6 @@ if ($nextVersionValue -lt $currentVersionValue) { throw "下一版本号不能�
 $shouldGenerateUpgradePackage = $nextVersionValue -gt $currentVersionValue
 
 $RootDirectory = [System.IO.Path]::GetFullPath($RootDirectory)
-if ([string]::IsNullOrWhiteSpace($OssHost)) { $OssHost = "http://10.106.1.123/upgrade/WarrenQ/WarrenqF1/$RuntimeIdentifier" }
 $stagingDirectory = Join-Path $RootDirectory "StagingRelease"
 $oldDirectory = Join-Path $RootDirectory "OldRelease"
 $patchOutputDirectory = Join-Path $RootDirectory "OutputPatchPackage"

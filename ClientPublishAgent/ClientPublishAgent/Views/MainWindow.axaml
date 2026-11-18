@@ -21,7 +21,7 @@
                 <TabItem Header="手工跨平台任务">
                     <views:MainView />
                 </TabItem>
-                <TabItem Header="打包目录配置">
+                <TabItem Header="升级打包配置">
                     <views:PackagingPathsView />
                 </TabItem>
                 <TabItem Header="脚本管理">

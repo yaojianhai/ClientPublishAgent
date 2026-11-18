@@ -13,6 +13,13 @@
             <Button Grid.Column="1" Content="保存源码目录" Command="{Binding SaveCommand}" MinWidth="120" />
         </Grid>
         <StackPanel Grid.Row="3" Spacing="12">
+            <StackPanel Spacing="8">
+                <TextBlock Text="升级基础地址（打包时自动追加平台和架构，如 win-x64）:" TextWrapping="Wrap" />
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <TextBox Text="{Binding OssHost}" PlaceholderText="https://cloud.gildata.com/gil/upgrade/WarrenQ/WarrenqF1" />
+                    <Button Grid.Column="1" Content="保存升级地址" Command="{Binding SaveOssHostCommand}" MinWidth="120" />
+                </Grid>
+            </StackPanel>
             <StackPanel x:Name="WindowsOutputSection" Spacing="8" IsVisible="{Binding IsWindowsHost}">
                 <TextBlock Text="Windows 打包输出根目录（保存至 Scripts/Desktop/win-package/publish-config.json）：" TextWrapping="Wrap" />
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">

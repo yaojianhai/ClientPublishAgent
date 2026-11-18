@@ -15,6 +15,7 @@ public partial class PackagingPathsViewModel : ViewModelBase
 	[ObservableProperty] public partial string PublishRootDirectory { get; set; } = "";
 	[ObservableProperty] private string _linuxPublishRootDirectory = "";
 	[ObservableProperty] private string _macOSPublishRootDirectory = "";
+	[ObservableProperty] public partial string OssHost { get; set; } = "";
 	[ObservableProperty] public partial string Status { get; set; } = "";
 	public bool IsWindowsHost => OperatingSystem.IsWindows();
 	public bool IsLinuxHost => OperatingSystem.IsLinux();
@@ -26,10 +27,26 @@ public partial class PackagingPathsViewModel : ViewModelBase
 		PublishRootDirectory = _publishConfigStore.RootDirectory;
 		LinuxPublishRootDirectory = _publishConfigStore.LinuxRootDirectory;
 		MacOSPublishRootDirectory = _publishConfigStore.MacOSRootDirectory;
+		OssHost = _publishConfigStore.OssHost;
 		PackagingPathsStore.SourceDirectoryChanged += HandleSourceDirectoryChanged;
 	}
 
 	private void HandleSourceDirectoryChanged(string path) => Dispatcher.UIThread.Post(() => SourceDirectory = path);
+
+	[RelayCommand]
+	private void SaveOssHost()
+	{
+		try
+		{
+			_publishConfigStore.SaveOssHost(OssHost);
+			OssHost = _publishConfigStore.OssHost;
+			Status = "升级基础地址已保存，打包时自动追加目标平台和架构。";
+		}
+		catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidOperationException)
+		{
+			Status = "保存失败：" + ex.Message;
+		}
+	}
 
 	[RelayCommand]
 	private void Save()

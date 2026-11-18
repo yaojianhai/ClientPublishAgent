@@ -61,6 +61,13 @@ public static class TaskCatalog
         new MarketServerPlugin()
     ];
     public static ITaskPlugin Get(string id) => Plugins.SingleOrDefault(p => p.Id == id) ?? throw new ArgumentException("Unknown plugin.");
+    public static string GetDesktopOssHost(string scriptsRoot, string runtimeIdentifier, string explicitHost)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitHost)) return explicitHost;
+        var configPath = Path.Combine(Path.GetFullPath(scriptsRoot), "win-package", "publish-config.json");
+        var config = new WindowsPublishConfigStore(configPath);
+        return config.OssHost + "/" + runtimeIdentifier;
+    }
     public static void ValidateRequest(PluginRequest request)
     {
         if (!Path.IsPathFullyQualified(request.ScriptsRoot)) throw new ArgumentException("Plugin root must be absolute.");
@@ -110,7 +117,8 @@ public static class TaskCatalog
                 args.AddRange(["-SigningIdentity", request.SigningIdentity.Trim()]);
             if (id == "macos-package" && !string.IsNullOrWhiteSpace(request.NotaryKeychainProfile))
                 args.AddRange(["-NotaryKeychainProfile", request.NotaryKeychainProfile.Trim()]);
-            if (!string.IsNullOrEmpty(request.OssHost)) args.AddRange(["-OssHost", request.OssHost]);
+            var ossHost = GetDesktopOssHost(request.ScriptsRoot, request.RuntimeIdentifier, request.OssHost);
+            args.AddRange(["-OssHost", ossHost]);
             var root = id is "windows-package" or "linux-package" or "macos-package"
                 ? GetDesktopOutputRoot(id, request.ScriptsRoot, request.RuntimeIdentifier)
                 : Path.Combine(Directory.GetParent(Path.GetFullPath(request.ScriptsRoot))?.Parent?.FullName ?? request.ScriptsRoot,

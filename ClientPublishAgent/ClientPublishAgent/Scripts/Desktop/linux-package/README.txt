@@ -16,6 +16,7 @@ Linux 发布脚本按宿主系统执行
 - 手工打包界面的 Native AOT 选项默认开启；关闭后发布脚本传递 PublishAot=false，并同时关闭 Linux trimming。脚本参数可用 -PublishAot true/false 显式设置。
 - WSL Debian 需安装 PowerShell 7、.NET SDK、Clang/LLVM、objcopy、tar；制 deb 还需 dpkg-deb、readelf、find、chmod、ln。
 - 源码目录、根目录或输出目录可传 Windows 绝对路径；Windows 分支会转换成 WSL 路径。Linux 分支直接使用 Linux 路径。
+- 打包目录配置中的升级基础地址保存在 win-package/publish-config.json 的 OssHost；Windows、Linux、macOS 升级脚本自动追加目标运行时，例如 linux-arm64。旧配置未设置时默认使用 https://cloud.gildata.com/gil/upgrade/WarrenQ/WarrenqF1，Linux/macOS 原先的内网默认地址不再使用；如需内网地址请在页面设置。脚本显式传入 -OssHost 时使用完整地址，不追加运行时。
 
 本次打包规则
 ------------

@@ -1,7 +1,7 @@
 ﻿param(
 	[string]$CurrentVersion,
 	[string]$NextVersion,
-	[string]$OssHost = "https://cloud.gildata.com/gil/upgrade/WarrenQ/WarrenqF1/win-x64",
+	[string]$OssHost,
 	[string]$RootDirectory,
 	[string]$SourceDirectory = $env:CLIENT_PUBLISH_SOURCE_DIRECTORY,
 	[bool]$BackupStagingRelease = $true
@@ -10,6 +10,8 @@
 $ErrorActionPreference = "Stop"
 $configScript = Join-Path $PSScriptRoot "publish-config.ps1"
 . $configScript
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "publish-root-config.ps1")
+$OssHost = Resolve-DesktopOssHost -RuntimeIdentifier "win-x64" -OssHost $OssHost
 $backupScript = Join-Path (Split-Path -Parent $PSScriptRoot) "backup-staging-release.ps1"
 . $backupScript
 # 必须与 publish-win-x64.ps1 和安装包脚本使用同一发布根目录。

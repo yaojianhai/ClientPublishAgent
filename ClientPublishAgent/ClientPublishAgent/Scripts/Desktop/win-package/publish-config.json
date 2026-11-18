@@ -1,5 +1,6 @@
 {
   "RootDirectory": "D:\\Publish\\WarrenqF1\\win-x64",
   "LinuxRootDirectory": "",
-  "MacOSRootDirectory": ""
+  "MacOSRootDirectory": "",
+  "OssHost": "https://cloud.gildata.com/gil/upgrade/WarrenQ/WarrenqF1"
 }
