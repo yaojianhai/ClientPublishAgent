@@ -108,6 +108,12 @@ try
         model.AssertHealthy();
         return;
     }
+    if (args.Contains("--terminal-loop", StringComparer.Ordinal))
+    {
+        await CheckTerminalLoopAsync(model, output, root, keyName, ct);
+        model.AssertHealthy();
+        return;
+    }
     Check(new AgentWorkspaceViewModel(new PlatformStore(Path.Combine(root, "empty-cache"))).KeyEnvironmentVariable == "", "no default API key variable");
     CheckHistoryIsolation(root);
     CheckScriptManager();
@@ -853,6 +859,113 @@ finally
             looping.Cancel();
         }
         Console.WriteLine("PASS: session and one-time approvals, revocation, isolation, boundaries and native tools");
+    }
+
+    static async Task CheckTerminalLoopAsync(FakeModel model, ConcurrentQueue<string> output, string root, string keyName, CancellationToken ct)
+    {
+        var profile = new AgentProfile { Name = "Terminal loop", Endpoint = model.Endpoint, Model = "fake-model",
+            KeyEnvironmentVariable = keyName, WorkspaceRoot = root, Terminal = true, Files = true };
+        HarnessSettings Settings() => new(profile.Endpoint, profile.Model, profile.KeyEnvironmentVariable, root, profile);
+        const string repeat = "Add-Content -LiteralPath 'loop-repeat.txt' -Value 'executed'";
+        using (var workspace = new HarnessWorkspace(Settings(), output.Enqueue))
+        {
+            await workspace.InitializeAsync(ct);
+            model.EnqueueTool("run_terminal", new { command = repeat });
+            var approval = (await workspace.SendAsync("start repeated command", cancellationToken: ct)).Approvals.Single();
+            model.EnqueueTool("run_terminal", new { command = "  " + repeat + "  " });
+            var notices = new ConcurrentQueue<string>();
+            var paused = await workspace.ApproveSessionAsync(approval.Id, notices.Enqueue, ct);
+            Check(paused.Approvals.Count == 1 && !workspace.ApproveForSession &&
+                File.ReadAllLines(Path.Combine(root, "loop-repeat.txt")).Length == 1 && string.Concat(notices).Contains("暂停自动执行"),
+                "duplicate terminal command pauses before execution, including the initial manually approved call");
+
+            model.EnqueueTool("run_terminal", new { command = repeat });
+            var pausedAgain = await workspace.ApproveSessionAsync(paused.Approvals.Single().Id, cancellationToken: ct);
+            Check(pausedAgain.Approvals.Count == 1 && !workspace.ApproveForSession &&
+                File.ReadAllLines(Path.Combine(root, "loop-repeat.txt")).Length == 2,
+                "explicit approval executes once but does not permit another duplicate across approval resumption");
+            model.EnqueueText("repeated execution approved");
+            await workspace.DecideAsync(pausedAgain.Approvals.Single().Id, true, cancellationToken: ct);
+            Check(File.ReadAllLines(Path.Combine(root, "loop-repeat.txt")).Length == 3, "one-time approval permits the requested repeat");
+
+            model.EnqueueTool("run_terminal", new { command = repeat });
+            approval = (await workspace.SendAsync("new user request", cancellationToken: ct)).Approvals.Single();
+            model.EnqueueText("session enabled again");
+            await workspace.ApproveSessionAsync(approval.Id, cancellationToken: ct);
+            model.EnqueueTool("run_terminal", new { command = repeat });
+            model.EnqueueText("new turn completed");
+            var fresh = await workspace.SendAsync("another user request", cancellationToken: ct);
+            Check(fresh.Approvals.Count == 0 && File.ReadAllLines(Path.Combine(root, "loop-repeat.txt")).Length == 5,
+                "a new user turn resets duplicate detection");
+        }
+        using (var workspace = new HarnessWorkspace(Settings(), output.Enqueue))
+        {
+            await workspace.InitializeAsync(ct);
+            model.EnqueueTool("write_workspace_file", new { path = "loop-enable.txt", content = "enabled" });
+            var approval = (await workspace.SendAsync("enable approval", cancellationToken: ct)).Approvals.Single();
+            model.EnqueueText("enabled");
+            await workspace.ApproveSessionAsync(approval.Id, cancellationToken: ct);
+            const string batch = "Add-Content -LiteralPath 'loop-batch.txt' -Value 'executed'";
+            model.EnqueueTools(("run_terminal", new { command = batch }), ("run_terminal", new { command = batch }));
+            var pending = await workspace.SendAsync("duplicate batch", cancellationToken: ct);
+            Check(pending.Approvals.Count == 2 && !workspace.ApproveForSession && !File.Exists(Path.Combine(root, "loop-batch.txt")),
+                "duplicate commands in a single batch are not automatically executed");
+            var remaining = await workspace.DecideAsync(pending.Approvals[0].Id, true, cancellationToken: ct);
+            model.EnqueueText("batch resolved");
+            await workspace.DecideAsync(remaining.Approvals.Single().Id, false, cancellationToken: ct);
+            Check(File.ReadAllLines(Path.Combine(root, "loop-batch.txt")).Length == 1, "batch decisions execute only the approved command");
+        }
+        using (var workspace = new HarnessWorkspace(Settings(), output.Enqueue))
+        {
+            await workspace.InitializeAsync(ct);
+            model.EnqueueTool("run_terminal", new { command = "Write-Output 'same-result'" });
+            var approval = (await workspace.SendAsync("repeated result", cancellationToken: ct)).Approvals.Single();
+            model.EnqueueTool("run_terminal", new { command = "Write-Output ('same-' + 'result')" });
+            model.EnqueueTool("run_terminal", new { command = "Set-Content -LiteralPath 'loop-result.txt' -Value 'executed'" });
+            var pending = await workspace.ApproveSessionAsync(approval.Id, cancellationToken: ct);
+            Check(pending.Approvals.Count == 1 && !workspace.ApproveForSession && !File.Exists(Path.Combine(root, "loop-result.txt")),
+                "two identical nonempty results stop the next terminal command even when commands differ");
+            model.EnqueueText("stopped");
+            await workspace.DecideAsync(pending.Approvals.Single().Id, false, cancellationToken: ct);
+        }
+        using (var workspace = new HarnessWorkspace(Settings(), output.Enqueue))
+        {
+            await workspace.InitializeAsync(ct);
+            model.EnqueueTool("run_terminal", new { command = "Write-Output 'first-result'" });
+            var approval = (await workspace.SendAsync("different results", cancellationToken: ct)).Approvals.Single();
+            model.EnqueueTool("run_terminal", new { command = "Write-Output 'second-result'" });
+            model.EnqueueTool("run_terminal", new { command = "Set-Content -LiteralPath 'loop-distinct.txt' -Value 'executed'" });
+            model.EnqueueText("different commands completed");
+            var result = await workspace.ApproveSessionAsync(approval.Id, cancellationToken: ct);
+            Check(result.Approvals.Count == 0 && File.Exists(Path.Combine(root, "loop-distinct.txt")),
+                "distinct commands with different results continue normally");
+        }
+        using (var workspace = new HarnessWorkspace(Settings(), output.Enqueue))
+        {
+            await workspace.InitializeAsync(ct);
+            model.EnqueueTool("run_terminal", new { command = "exit 7" });
+            var approval = (await workspace.SendAsync("repeated failure", cancellationToken: ct)).Approvals.Single();
+            model.EnqueueTool("run_terminal", new { command = "exit (3 + 4)" });
+            model.EnqueueTool("run_terminal", new { command = "Set-Content -LiteralPath 'loop-failure.txt' -Value 'executed'" });
+            var pending = await workspace.ApproveSessionAsync(approval.Id, cancellationToken: ct);
+            Check(pending.Approvals.Count == 1 && !File.Exists(Path.Combine(root, "loop-failure.txt")),
+                "identical nonzero exit codes without output stop the next terminal command");
+            model.EnqueueText("failure stopped");
+            await workspace.DecideAsync(pending.Approvals.Single().Id, false, cancellationToken: ct);
+        }
+        using (var workspace = new HarnessWorkspace(Settings(), output.Enqueue))
+        {
+            await workspace.InitializeAsync(ct);
+            model.EnqueueTool("run_terminal", new { command = "Set-Content -LiteralPath 'loop-empty-1.txt' -Value '1'" });
+            var approval = (await workspace.SendAsync("silent commands", cancellationToken: ct)).Approvals.Single();
+            model.EnqueueTool("run_terminal", new { command = "Set-Content -LiteralPath 'loop-empty-2.txt' -Value '2'" });
+            model.EnqueueTool("run_terminal", new { command = "Set-Content -LiteralPath 'loop-empty-3.txt' -Value '3'" });
+            model.EnqueueText("silent commands completed");
+            var result = await workspace.ApproveSessionAsync(approval.Id, cancellationToken: ct);
+            Check(result.Approvals.Count == 0 && File.Exists(Path.Combine(root, "loop-empty-3.txt")),
+                "distinct successful commands with empty output are not mistaken for a loop");
+        }
+        Console.WriteLine("Terminal loop prevention checks passed.");
     }
 
     static async Task CheckTerminalResultAsync(FakeModel model, ConcurrentQueue<string> output, string root, string keyName, CancellationToken ct)

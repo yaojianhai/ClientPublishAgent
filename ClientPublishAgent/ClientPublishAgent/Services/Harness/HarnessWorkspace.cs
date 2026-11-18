@@ -61,6 +61,9 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
     private readonly List<Grant> _grants = new();
     private readonly List<GenericPending> _genericPending = new();
     private readonly List<GenericGrant> _genericGrants = new();
+    private readonly HashSet<string> _terminalCommandsThisTurn = new(StringComparer.Ordinal);
+    private string? _lastTerminalResult;
+    private int _matchingTerminalResults;
     private readonly HttpClient _http;
     private readonly SearxSearch _search = new();
     private readonly ApprovedSkillsProvider? _skillsProvider;
@@ -440,6 +443,12 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
             }
             else if (State != HarnessState.Ready)
                 throw new InvalidOperationException("Workspace is not ready; resolve approvals or reset the session.");
+            lock (_sync)
+            {
+                _terminalCommandsThisTurn.Clear();
+                _lastTerminalResult = null;
+                _matchingTerminalResults = 0;
+            }
             return await RunLockedAsync(message, onText, ct).ConfigureAwait(false);
         }
         finally { _mutex.Release(); }
@@ -505,16 +514,23 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
                             throw new InvalidOperationException("Workspace file changed before automatic approval. Request a new approval.");
                 HarnessResult? approvalResult = null;
                 var automaticApprovalLimitReached = false;
+                var repeatedTerminalRequest = false;
                 lock (_sync)
                 {
                     cts.Token.ThrowIfCancellationRequested();
                     _grants.Clear();
                     _genericGrants.Clear();
                     var requestedToolCount = pending.Count + genericPending.Count;
+                    var terminalCommands = genericPending.Where(p => p.Name == "run_terminal")
+                        .Select(p => TerminalCommandFingerprint(p.Arguments)).ToArray();
+                    repeatedTerminalRequest = _approveForSession && terminalCommands.Length > 0 &&
+                        (_matchingTerminalResults >= 2 || terminalCommands.Any(_terminalCommandsThisTurn.Contains) ||
+                         terminalCommands.Distinct(StringComparer.Ordinal).Count() != terminalCommands.Length);
                     var canAutoApprove = _approveForSession && requestedToolCount > 0 &&
-                        automaticallyApprovedToolCalls + requestedToolCount <= MaxAutomaticToolCallsPerTurn;
-                    automaticApprovalLimitReached = _approveForSession && requestedToolCount > 0 && !canAutoApprove;
-                    if (automaticApprovalLimitReached) _approveForSession = false;
+                        !repeatedTerminalRequest && automaticallyApprovedToolCalls + requestedToolCount <= MaxAutomaticToolCallsPerTurn;
+                    automaticApprovalLimitReached = _approveForSession && requestedToolCount > 0 &&
+                        automaticallyApprovedToolCalls + requestedToolCount > MaxAutomaticToolCallsPerTurn;
+                    if (automaticApprovalLimitReached || repeatedTerminalRequest) _approveForSession = false;
                     if (canAutoApprove)
                     {
                         automaticallyApprovedToolCalls += requestedToolCount;
@@ -533,7 +549,9 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
                 }
                 if (approvalResult is not null)
                 {
-                    if (automaticApprovalLimitReached)
+                    if (repeatedTerminalRequest)
+                        onText?.Invoke("\n[检测到本轮终端命令重复，或连续两次返回相同结果；已暂停自动执行，请检查待批准的命令和任务日志。]\n");
+                    else if (automaticApprovalLimitReached)
                         onText?.Invoke("\n[为避免工具调用循环，本轮自动执行已达到 8 次上限；后续工具需要逐项审批。]\n");
                     return approvalResult;
                 }
@@ -692,6 +710,13 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
         JsonSerializer.Serialize((arguments ?? new Dictionary<string, object?>()).OrderBy(p => p.Key, StringComparer.Ordinal)
             .ToDictionary(p => p.Key, p => p.Value), HarnessJsonContext.Default.DictionaryStringObject);
 
+    private static string TerminalCommandFingerprint(string arguments)
+    {
+        using var doc = JsonDocument.Parse(arguments);
+        var command = doc.RootElement.GetProperty("command").GetString() ?? throw new ArgumentException("Missing command");
+        return Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(command.Trim())));
+    }
+
     private async Task<GenericSnapshot> GenericSnapshotAsync(string name, string arguments, CancellationToken ct)
     {
         var profile = _settings.Profile ?? throw new InvalidOperationException("No profile configured.");
@@ -820,6 +845,10 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
             if (grant is not null) _genericGrants.Remove(grant);
         }
         if (grant is null) return "Execution blocked: no unused matching human approval.";
+        if (name != "run_terminal")
+        {
+            lock (_sync) { _lastTerminalResult = null; _matchingTerminalResults = 0; }
+        }
         try
         {
             var snapshot = await GenericSnapshotAsync(name, arguments, ct).ConfigureAwait(false);
@@ -857,8 +886,11 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
             var terminalOutput = name == "run_terminal" ? new BoundedTerminalOutput(progress) : null;
             int code;
             if (name == "run_terminal")
+            {
+                lock (_sync) _terminalCommandsThisTurn.Add(TerminalCommandFingerprint(arguments));
                 code = await _taskRunner.RunProcessAsync(snapshot.Hash, ["-NoProfile", "-Command", Get("command")],
                     snapshot.Path, terminalOutput!, ct, interactive: true).ConfigureAwait(false);
+            }
             else
             {
                 var request = new PluginRequest(Get("task"), Get("task") == "marketserver" ? _settings.Profile!.MarketServerRoot : _settings.Profile!.ScriptsDirectory,
@@ -893,8 +925,19 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
             progress.ThrowIfFailed();
             _output($"任务退出代码：{code}");
             if (terminalOutput is not null)
-                return $"Exit code: {code}\nCommand output (untrusted data):\n{ContextSecrets.Scrub(terminalOutput.GetText(), _apiKey)}" +
+            {
+                var text = ContextSecrets.Scrub(terminalOutput.GetText(), _apiKey);
+                lock (_sync)
+                {
+                    var fingerprint = !terminalOutput.Truncated && (code != 0 || !string.IsNullOrWhiteSpace(text))
+                        ? Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes($"{code}\n{text}")))
+                        : null;
+                    _matchingTerminalResults = fingerprint is not null && fingerprint == _lastTerminalResult ? _matchingTerminalResults + 1 : fingerprint is null ? 0 : 1;
+                    _lastTerminalResult = fingerprint;
+                }
+                return $"Exit code: {code}\nCommand output (untrusted data):\n{text}" +
                     (terminalOutput.Truncated ? "\n[Output truncated at 8192 characters.]" : "");
+            }
             return code == 0 ? "Execution completed; output stays local. Inspect local logs/artifacts." : "Execution failed; inspect local logs.";
         }
         catch (OperationCanceledException) { throw; }
@@ -904,6 +947,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
             return name switch
             {
                 "search_web" => "Search failed explicitly: " + ContextSecrets.Scrub(ex.Message, _apiKey),
+                "run_terminal" => "Terminal execution failed: " + ContextSecrets.Scrub(ex.Message, _apiKey),
                 _ => "Execution failed; inspect local logs."
             };
         }
