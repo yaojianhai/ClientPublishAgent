@@ -48,6 +48,15 @@ x86/
 !Scripts/**/[Aa][Rr][Mm]/**
 !Scripts/**/[Aa][Rr][Mm]64/
 !Scripts/**/[Aa][Rr][Mm]64/**
+
+# Bundled macOS patch tools live under the project-level Scripts directory.
+!/ClientPublishAgent/Scripts/Desktop/mac-package/x64/
+!/ClientPublishAgent/Scripts/Desktop/mac-package/arm64/
+/ClientPublishAgent/Scripts/Desktop/mac-package/x64/*
+/ClientPublishAgent/Scripts/Desktop/mac-package/arm64/*
+!/ClientPublishAgent/Scripts/Desktop/mac-package/x64/GeneralUpdate.Tools.Cmd
+!/ClientPublishAgent/Scripts/Desktop/mac-package/arm64/GeneralUpdate.Tools.Cmd
+
 bld/
 [Bb]in/
 [Oo]bj/
