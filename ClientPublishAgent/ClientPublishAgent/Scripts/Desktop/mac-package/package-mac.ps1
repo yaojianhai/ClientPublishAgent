@@ -18,6 +18,7 @@
 
 $ErrorActionPreference = "Stop"
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "publish-root-config.ps1")
+. (Join-Path $PSScriptRoot "mac-office-resources.ps1")
 
 function Test-RequiredCommand {
 	param(
@@ -101,11 +102,11 @@ if ($hasSigningIdentity -ne $hasNotaryKeychainProfile) {
 	throw "macOS 完整分发要求同时提供 Developer ID 签名身份和 notarytool 钥匙串配置名称；两项都留空时生成未签名测试包。"
 }
 
-foreach ($command in "uname", "chmod", "hdiutil", "lipo", "xattr", "ln", "SetFile") {
+foreach ($command in "uname", "chmod", "hdiutil", "lipo", "xattr", "ln", "SetFile", "ditto") {
 	Test-RequiredCommand -Name $command
 }
 if ($hasSigningIdentity) {
-	foreach ($command in "codesign", "xcrun", "ditto") {
+	foreach ($command in "codesign", "xcrun") {
 		Test-RequiredCommand -Name $command
 	}
 }
@@ -184,6 +185,7 @@ try {
 	New-Item -ItemType Directory -Path $macOsDirectory, $resourcesDirectory, $dmgContentsDirectory -Force | Out-Null
 	Get-ChildItem -LiteralPath $PublishDirectory -Force |
 		Copy-Item -Destination $macOsDirectory -Recurse -Force
+	Move-MacOfficeResources -MacOsDirectory $macOsDirectory -ResourcesDirectory $resourcesDirectory
 	Copy-Item -LiteralPath $iconFile -Destination (Join-Path $resourcesDirectory "warrenq.icns") -Force
 
 	$infoPlist = @"
@@ -254,7 +256,7 @@ try {
 		Invoke-NativeCommand -Name "codesign" -Arguments @("--verify", "--deep", "--strict", $appBundle)
 	}
 
-	Copy-Item -LiteralPath $appBundle -Destination $dmgContentsDirectory -Recurse -Force
+	Invoke-NativeCommand -Name "ditto" -Arguments @($appBundle, (Join-Path $dmgContentsDirectory "$applicationName.app"))
 	Invoke-NativeCommand -Name "ln" -Arguments @("-s", "/Applications", (Join-Path $dmgContentsDirectory "Applications"))
 	Copy-Item -LiteralPath $iconFile -Destination (Join-Path $dmgContentsDirectory ".VolumeIcon.icns") -Force
 
