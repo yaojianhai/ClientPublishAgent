@@ -51,6 +51,7 @@ try
     if (args.Contains("--packaging-version", StringComparer.Ordinal))
     {
         CheckPackagingVersionReader(root);
+        await CheckPackagingVersionDefaultsAsync(root);
         return;
     }
     if (args.Contains("--packaging-ui", StringComparer.Ordinal))
@@ -342,6 +343,49 @@ finally
             Console.WriteLine("Manual packaging native target checks passed.");
         }
         finally { await viewModel.CloseAsync(); }
+    }
+
+    static async Task CheckPackagingVersionDefaultsAsync(string root)
+    {
+        var configPath = WindowsPublishConfigStore.ConfigPath;
+        var originalConfig = File.Exists(configPath) ? await File.ReadAllBytesAsync(configPath) : null;
+        var outputRoot = Path.Combine(root, "manual-version-defaults");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
+            await File.WriteAllTextAsync(configPath, JsonSerializer.Serialize(new
+            {
+                RootDirectory = outputRoot, LinuxRootDirectory = outputRoot, MacOSRootDirectory = outputRoot
+            }));
+            async Task CheckVersionsAsync(string current, string next, string description)
+            {
+                var viewModel = new MainViewModel();
+                try
+                {
+                    viewModel.SelectedArchitecture = "x64";
+                    Check(viewModel.CurrentVersion == current && viewModel.NextVersion == next, description);
+                }
+                finally { await viewModel.CloseAsync(); }
+            }
+            var runtime = TaskCatalog.Host switch
+            {
+                NativeHost.Windows => "win-x64", NativeHost.MacOS => "osx-x64", _ => "linux-x64"
+            };
+            var patchDirectory = Path.Combine(TaskCatalog.Host == NativeHost.Windows ? outputRoot : Path.Combine(outputRoot, runtime), "OutputPatchPackage");
+            await CheckVersionsAsync("1.0.0", "1.0.1", "manual packaging defaults when patch directory is missing");
+            Directory.CreateDirectory(patchDirectory);
+            await CheckVersionsAsync("1.0.0", "1.0.1", "manual packaging defaults when patch directory is empty");
+            await File.WriteAllTextAsync(Path.Combine(patchDirectory, "unrecognized.zip"), "");
+            await CheckVersionsAsync("1.0.0", "1.0.1", "manual packaging defaults when no filename contains a version");
+            await File.WriteAllTextAsync(Path.Combine(patchDirectory, "patch_v1.0.98_to_v1.0.99.zip"), "");
+            await CheckVersionsAsync("1.0.99", "1.1.0", "manual packaging preserves historical version reading and carry");
+        }
+        finally
+        {
+            if (originalConfig is not null) await File.WriteAllBytesAsync(configPath, originalConfig);
+            else File.Delete(configPath);
+        }
+        Console.WriteLine("Manual packaging default version checks passed.");
     }
 
     static void CheckPackagingVersionReader(string root)

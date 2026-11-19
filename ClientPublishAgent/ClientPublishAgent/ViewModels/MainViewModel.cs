@@ -156,9 +156,9 @@ public partial class MainViewModel : ViewModelBase
             var versions = PackagingVersionReader.GetLatestPatchVersions(outputRoot);
             if (versions is null)
             {
-                CurrentVersion = "";
-                NextVersion = "";
-                VersionSourceStatus = "未找到历史增量包，请先完成一次发布；版本号将从最新增量包文件名自动读取。";
+                CurrentVersion = "1.0.0";
+                NextVersion = "1.0.1";
+                VersionSourceStatus = "未找到历史增量包，使用初始版本 1.0.0，下次版本 1.0.1。";
                 return;
             }
 
