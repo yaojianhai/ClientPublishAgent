@@ -208,6 +208,7 @@
                                     <CheckBox IsChecked="{Binding EnableFiles}"><TextBlock Text="工作区文件读写 / 文件传输（需授权）" TextWrapping="Wrap" /></CheckBox>
                                     <CheckBox IsChecked="{Binding EnableTerminal}"><TextBlock Text="终端（非沙箱，授权后输出会发送给模型）" TextWrapping="Wrap" /></CheckBox>
                                     <CheckBox IsChecked="{Binding EnablePackaging}" Content="跨平台任务插件" />
+                                    <TextBlock Text="启用后可说“发布 arm64、x64 升级包+安装包，下次版本 1.0.3”；按当前系统支持的架构逐项确认、顺序执行，使用手工打包的目录和版本规则。" Classes="muted" TextWrapping="Wrap" />
                                     <CheckBox IsChecked="{Binding EnableMemory}"><TextBlock Text="显式文件 memory（需授权，无自动加载）" TextWrapping="Wrap" /></CheckBox>
                                     <CheckBox IsChecked="{Binding EnableAutoMemory}"><TextBlock Text="自动 memory：每轮目录文本送到模型" TextWrapping="Wrap" /></CheckBox>
                                     <TextBox Text="{Binding MemoryDirectory}" PlaceholderText="工作区相对 memory 目录" />

@@ -190,17 +190,17 @@ public partial class MainViewModel : ViewModelBase
         try
         {
             var outputRoot = TaskCatalog.GetDesktopOutputRoot(plugin, DesktopScriptsDirectory, runtime);
-            var versions = PackagingVersionReader.GetLatestPatchVersions(outputRoot);
-            if (versions is null)
+            var versions = PackagingVersionReader.GetVersionsOrDefault(outputRoot, out var hasHistory);
+            if (!hasHistory)
             {
-                CurrentVersion = "1.0.0";
-                NextVersion = "1.0.1";
+                CurrentVersion = versions.CurrentVersion;
+                NextVersion = versions.NextVersion;
                 VersionSourceStatus = "未找到历史增量包，使用初始版本 1.0.0，下次版本 1.0.1。";
                 return;
             }
 
-            CurrentVersion = versions.Value.CurrentVersion;
-            NextVersion = versions.Value.NextVersion;
+            CurrentVersion = versions.CurrentVersion;
+            NextVersion = versions.NextVersion;
             VersionSourceStatus = "已从最近输出的增量包自动读取当前版本，并计算下次版本。";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or

@@ -54,6 +54,18 @@ try
         await CheckPackagingVersionDefaultsAsync(root);
         return;
     }
+    if (args.Contains("--agent-latest-packaging", StringComparer.Ordinal))
+    {
+        await CheckAgentLatestPackagingAsync(model, root, keyName, ct);
+        model.AssertHealthy();
+        return;
+    }
+    if (args.Contains("--agent-multi-packaging", StringComparer.Ordinal))
+    {
+        await CheckAgentMultiPackagingAsync(model, root, keyName, ct);
+        model.AssertHealthy();
+        return;
+    }
     if (args.Contains("--packaging-ui", StringComparer.Ordinal))
     {
         await CheckPackagingUiAsync(ct);
@@ -442,6 +454,180 @@ finally
             else File.Delete(configPath);
         }
         Console.WriteLine("Manual packaging default version checks passed.");
+    }
+
+    static async Task CheckAgentLatestPackagingAsync(FakeModel model, string root, string keyName, CancellationToken token)
+    {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("This fixture exercises the Windows desktop plugin.");
+        var scripts = Path.Combine(root, "agent-desktop");
+        var win = Path.Combine(scripts, "win-package");
+        var source = Path.Combine(root, "agent-source");
+        var outputRoot = Path.Combine(root, "agent-output");
+        Directory.CreateDirectory(win);
+        Directory.CreateDirectory(source);
+        await File.WriteAllTextAsync(Path.Combine(scripts, "publish-root-config.ps1"), "", token);
+        await File.WriteAllTextAsync(Path.Combine(win, "publish-config.json"), JsonSerializer.Serialize(new { RootDirectory = outputRoot }), token);
+        var resultFile = Path.Combine(source, "executed.json");
+        await File.WriteAllTextAsync(Path.Combine(win, "publish-upgrade-package-win-x64.ps1"),
+            "param($CurrentVersion,$NextVersion,$SourceDirectory,$RuntimeIdentifier,$PackageType,$PublishAot,$OssHost)\n" +
+            "@{ current=$CurrentVersion; next=$NextVersion; source=$SourceDirectory; runtime=$RuntimeIdentifier; package=$PackageType; aot=$PublishAot } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $SourceDirectory 'executed.json')\n", token);
+        var logs = new ConcurrentQueue<string>();
+        var profile = new AgentProfile { Name = "Packaging skill", Endpoint = model.Endpoint, Model = "fake-model", KeyEnvironmentVariable = keyName,
+            WorkspaceRoot = root, ScriptsDirectory = scripts, Packaging = true };
+        using var workspace = new HarnessWorkspace(new HarnessSettings(profile.Endpoint, profile.Model, keyName, scripts, profile), logs.Enqueue, () => source, () => scripts);
+        await workspace.InitializeAsync(token);
+
+        model.EnqueueTool("publish_latest_desktop_packages", new { });
+        var approval = (await workspace.SendAsync("发布最新安装包+升级包", cancellationToken: token)).Approvals.Single();
+        Check(approval.Details.Contains("当前版本：1.0.0") && approval.Details.Contains("下次版本：1.0.1"), "skill uses initial versions without patch history");
+        Check(!File.Exists(resultFile), "skill does not execute before approval");
+        Check(model.Requests.Last().Contains("publish_latest_desktop_packages"), "built-in skill is exposed to the model");
+        model.EnqueueText("done");
+        await workspace.DecideAsync(approval.Id, true, cancellationToken: token);
+        using (var result = JsonDocument.Parse(await File.ReadAllTextAsync(resultFile, token)))
+        {
+            Check(result.RootElement.GetProperty("current").GetString() == "1.0.0" && result.RootElement.GetProperty("next").GetString() == "1.0.1" &&
+                result.RootElement.GetProperty("runtime").GetString() == "win-x64" && result.RootElement.GetProperty("package").GetString() == "upgrade-installer" &&
+                result.RootElement.GetProperty("source").GetString() == source, "approved skill passes exact versions, source, native runtime and both package types");
+        }
+
+        var patchDirectory = Path.Combine(outputRoot, "OutputPatchPackage");
+        Directory.CreateDirectory(patchDirectory);
+        await File.WriteAllTextAsync(Path.Combine(patchDirectory, "patch_v1.0.98_to_v1.0.99.zip"), "", token);
+        model.EnqueueTool("publish_latest_desktop_packages", new { nextVersion = "1.2.3", architecture = "x64" });
+        approval = (await workspace.SendAsync("发布最新安装包+升级包，下次版本 1.2.3", cancellationToken: token)).Approvals.Single();
+        Check(approval.Details.Contains("当前版本：1.0.99") && approval.Details.Contains("下次版本：1.2.3"), "explicit next version overrides automatic increment");
+        model.EnqueueText("done");
+        await workspace.DecideAsync(approval.Id, true, cancellationToken: token);
+        using (var result = JsonDocument.Parse(await File.ReadAllTextAsync(resultFile, token)))
+            Check(result.RootElement.GetProperty("current").GetString() == "1.0.99" && result.RootElement.GetProperty("next").GetString() == "1.2.3", "explicit version reaches the script");
+
+        model.EnqueueTool("publish_latest_desktop_packages", new { nextVersion = "", architecture = "" });
+        approval = (await workspace.SendAsync("发布最新安装包+升级包", cancellationToken: token)).Approvals.Single();
+        Check(approval.Details.Contains("当前版本：1.0.99") && approval.Details.Contains("下次版本：1.1.0"), "automatic version carries at 100");
+        var priorResult = await File.ReadAllTextAsync(resultFile, token);
+        var newer = Path.Combine(patchDirectory, "patch_v1.0.99_to_v1.1.0.zip");
+        await File.WriteAllTextAsync(newer, "", token);
+        File.SetLastWriteTimeUtc(newer, DateTime.UtcNow.AddSeconds(5));
+        model.EnqueueText("not executed");
+        await workspace.DecideAsync(approval.Id, true, cancellationToken: token);
+        Check(await File.ReadAllTextAsync(resultFile, token) == priorResult && logs.Any(s => s.Contains("changed after approval")),
+            "changed patch history invalidates approval instead of running with stale versions");
+        foreach (var invalid in new[] { (Next: "1.1.0", Architecture: "x64", Error: "必须大于"),
+            (Next: "1.2.100", Architecture: "x64", Error: "0 到 99"),
+            (Next: "1.2.0", Architecture: "arm64", Error: "不支持"),
+            (Next: "1.2.0", Architecture: "arm,x64", Error: "不支持") })
+        {
+            using var invalidWorkspace = new HarnessWorkspace(new HarnessSettings(profile.Endpoint, profile.Model, keyName, scripts, profile), logs.Enqueue, () => source, () => scripts);
+            await invalidWorkspace.InitializeAsync(token);
+            model.EnqueueTool("publish_latest_desktop_packages", new { nextVersion = invalid.Next, architecture = invalid.Architecture });
+            try
+            {
+                await invalidWorkspace.SendAsync("发布安装包和升级包", cancellationToken: token);
+                throw new Exception("FAIL: invalid packaging target accepted");
+            }
+            catch (Exception ex) when (ex is ArgumentException or PlatformNotSupportedException)
+            {
+                Check(ex.Message.Contains(invalid.Error), "invalid target reports a specific error");
+            }
+        }
+        Check(await File.ReadAllTextAsync(resultFile, token) == priorResult, "invalid targets never start a package script");
+        Console.WriteLine("Agent latest desktop packaging skill checks passed.");
+    }
+
+    static async Task CheckAgentMultiPackagingAsync(FakeModel model, string root, string keyName, CancellationToken token)
+    {
+        if (!OperatingSystem.IsLinux()) throw new PlatformNotSupportedException("This fixture exercises the Linux desktop plugin.");
+        var scripts = Path.Combine(root, "agent-multi-desktop");
+        var linux = Path.Combine(scripts, "linux-package");
+        var win = Path.Combine(scripts, "win-package");
+        var source = Path.Combine(root, "agent-multi-source");
+        var outputRoot = Path.Combine(root, "agent-multi-output");
+        Directory.CreateDirectory(linux);
+        Directory.CreateDirectory(win);
+        Directory.CreateDirectory(source);
+        await File.WriteAllTextAsync(Path.Combine(scripts, "publish-root-config.ps1"), "", token);
+        await File.WriteAllTextAsync(Path.Combine(win, "publish-config.json"), JsonSerializer.Serialize(new { LinuxRootDirectory = outputRoot }), token);
+        await File.WriteAllTextAsync(Path.Combine(linux, "linux-publish&upgrade&package.ps1"),
+            "param($CurrentVersion,$NextVersion,$SourceDirectory,$RuntimeIdentifier,$PackageType,$PublishAot,$OssHost,$RootDirectory)\n" +
+            "Add-Content -LiteralPath (Join-Path $SourceDirectory 'runs.txt') -Value \"$RuntimeIdentifier|$CurrentVersion|$NextVersion|$PackageType\"\n" +
+            "if (Test-Path -LiteralPath (Join-Path $SourceDirectory ('fail-' + $RuntimeIdentifier))) { exit 7 }\n" +
+            "$patch = Join-Path $RootDirectory 'OutputPatchPackage'; New-Item -ItemType Directory -Force -Path $patch | Out-Null\n" +
+            "Set-Content -LiteralPath (Join-Path $patch ('patch_v' + $CurrentVersion + '_to_v' + $NextVersion + '.zip')) -Value ''\n" +
+            "if (Test-Path -LiteralPath (Join-Path $SourceDirectory 'change-x64')) { $other = Join-Path (Split-Path $RootDirectory) 'linux-x64' 'OutputPatchPackage' 'patch_v1.0.3_to_v1.0.4.zip'; Set-Content -LiteralPath $other -Value ''; (Get-Item -LiteralPath $other).LastWriteTimeUtc = [DateTime]::UtcNow.AddSeconds(5) }\n", token);
+        var armPatch = Path.Combine(outputRoot, "linux-arm64", "OutputPatchPackage");
+        var x64Patch = Path.Combine(outputRoot, "linux-x64", "OutputPatchPackage");
+        Directory.CreateDirectory(armPatch);
+        Directory.CreateDirectory(x64Patch);
+        await File.WriteAllTextAsync(Path.Combine(armPatch, "patch_v1.0.1_to_v1.0.2.zip"), "", token);
+        await File.WriteAllTextAsync(Path.Combine(x64Patch, "patch_v1.0.0_to_v1.0.1.zip"), "", token);
+        var profile = new AgentProfile { Name = "Multi packaging", Endpoint = model.Endpoint, Model = "fake-model", KeyEnvironmentVariable = keyName,
+            WorkspaceRoot = root, Packaging = true };
+        var logs = new ConcurrentQueue<string>();
+        using var workspace = new HarnessWorkspace(new HarnessSettings(profile.Endpoint, profile.Model, keyName, "", profile), logs.Enqueue, () => source, () => scripts);
+        await workspace.InitializeAsync(token);
+        var runs = Path.Combine(source, "runs.txt");
+
+        model.EnqueueTool("publish_latest_desktop_packages", new { architecture = "arm,arm64,x64,x64", nextVersion = "" });
+        var defaults = (await workspace.SendAsync("发布两个架构", cancellationToken: token)).Approvals;
+        Check(defaults.Count == 2 && defaults[0].Details.Contains("当前版本：1.0.2") && defaults[0].Details.Contains("下次版本：1.0.3") &&
+            defaults[1].Details.Contains("当前版本：1.0.1") && defaults[1].Details.Contains("下次版本：1.0.2"),
+            "automatic target is computed separately and duplicate architecture aliases are deduplicated");
+        await workspace.DecideAsync(defaults[0].Id, false, cancellationToken: token);
+        model.EnqueueText("denied");
+        await workspace.DecideAsync(defaults[1].Id, true, cancellationToken: token);
+        Check(!File.Exists(runs), "denied default-version batch does not run");
+
+        model.EnqueueTool("publish_latest_desktop_packages", new { architecture = "arm,x64", nextVersion = "1.0.3" });
+        var approvals = (await workspace.SendAsync("发布arm,x64 升级包+安装包 下个版本号是 1.0.3", cancellationToken: token)).Approvals;
+        Check(approvals.Count == 2 && approvals[0].Details.Contains("linux-arm64") && approvals[0].Details.Contains("当前版本：1.0.2") &&
+            approvals[1].Details.Contains("linux-x64") && approvals[1].Details.Contains("当前版本：1.0.1") &&
+            approvals.All(a => a.Details.Contains("下次版本：1.0.3")), "batch has a separate approval and history for each architecture");
+        var remaining = await workspace.DecideAsync(approvals[0].Id, true, cancellationToken: token);
+        Check(remaining.Approvals.Count == 1 && !File.Exists(runs), "first approval alone does not start either architecture");
+        model.EnqueueText("done");
+        await workspace.DecideAsync(approvals[1].Id, true, cancellationToken: token);
+        Check((await File.ReadAllLinesAsync(runs, token)).SequenceEqual(["linux-arm64|1.0.2|1.0.3|upgrade-installer", "linux-x64|1.0.1|1.0.3|upgrade-installer"]),
+            "approved architectures run once in order with their own versions");
+
+        model.EnqueueTool("publish_latest_desktop_packages", new { architecture = "arm64,x64", nextVersion = "1.0.4" });
+        approvals = (await workspace.SendAsync("再次发布", cancellationToken: token)).Approvals;
+        await workspace.DecideAsync(approvals[0].Id, false, cancellationToken: token);
+        model.EnqueueText("denied");
+        await workspace.DecideAsync(approvals[1].Id, true, cancellationToken: token);
+        Check((await File.ReadAllLinesAsync(runs, token)).Length == 2, "denying one architecture blocks the entire batch");
+
+        await File.WriteAllTextAsync(Path.Combine(source, "fail-linux-arm64"), "", token);
+        model.EnqueueTool("publish_latest_desktop_packages", new { architecture = "arm64,x64", nextVersion = "1.0.4" });
+        approvals = (await workspace.SendAsync("发布两个架构", cancellationToken: token)).Approvals;
+        await workspace.DecideAsync(approvals[0].Id, true, cancellationToken: token);
+        model.EnqueueText("failed");
+        await workspace.DecideAsync(approvals[1].Id, true, cancellationToken: token);
+        Check((await File.ReadAllLinesAsync(runs, token)).Length == 3 && logs.Any(s => s.Contains("后续架构未执行")) &&
+            model.Requests.Last().Contains("remaining architectures not run"), "failure stops the batch and is reported to the model");
+        File.Delete(Path.Combine(source, "fail-linux-arm64"));
+
+        await File.WriteAllTextAsync(Path.Combine(source, "change-x64"), "", token);
+        model.EnqueueTool("publish_latest_desktop_packages", new { architecture = "arm64,x64", nextVersion = "1.0.4" });
+        approvals = (await workspace.SendAsync("发布两个架构", cancellationToken: token)).Approvals;
+        await workspace.DecideAsync(approvals[0].Id, true, cancellationToken: token);
+        model.EnqueueText("stopped");
+        await workspace.DecideAsync(approvals[1].Id, true, cancellationToken: token);
+        Check((await File.ReadAllLinesAsync(runs, token)).Length == 4 && model.Requests.Last().Contains("completed: linux-arm64") &&
+            model.Requests.Last().Contains("remaining architectures not run"), "changed second-architecture history prevents stale execution and reports partial completion");
+        File.Delete(Path.Combine(source, "change-x64"));
+        model.EnqueueTool("publish_latest_desktop_packages", new { architecture = "arm64,x64", nextVersion = "1.1.0" });
+        approvals = (await workspace.SendAsync("发布两个架构", cancellationToken: token)).Approvals;
+        model.EnqueueText("done");
+        await workspace.ApproveSessionAsync(approvals[0].Id, cancellationToken: token);
+        Check((await File.ReadAllLinesAsync(runs, token)).Length == 6, "session approval runs each architecture once without duplicate tool responses");
+        model.EnqueueTool("publish_latest_desktop_packages", new { architecture = "arm64,x64", nextVersion = "1.1.1" });
+        model.EnqueueText("done");
+        var automatic = await workspace.SendAsync("发布两个架构", cancellationToken: token);
+        Check(automatic.Approvals.Count == 0 && (await File.ReadAllLinesAsync(runs, token)).Length == 8,
+            "existing session approval automatically processes the batch once");
+        workspace.RevokeSessionApproval();
+        Console.WriteLine("Agent multi-architecture packaging checks passed.");
     }
 
     static void CheckPackagingVersionReader(string root)

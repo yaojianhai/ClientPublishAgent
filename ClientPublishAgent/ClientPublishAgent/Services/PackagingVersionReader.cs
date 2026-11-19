@@ -12,6 +12,13 @@ public static class PackagingVersionReader
 		@"^patch_v(?<from>(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))_to_v(?<to>(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))\.zip$",
 		RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
+	public static (string CurrentVersion, string NextVersion) GetVersionsOrDefault(string outputRoot, out bool hasHistory)
+	{
+		var versions = GetLatestPatchVersions(outputRoot);
+		hasHistory = versions.HasValue;
+		return versions ?? ("1.0.0", "1.0.1");
+	}
+
 	public static (string CurrentVersion, string NextVersion)? GetLatestPatchVersions(string outputRoot)
 	{
 		ArgumentException.ThrowIfNullOrWhiteSpace(outputRoot);
