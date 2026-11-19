@@ -69,7 +69,7 @@ public sealed class PowerShellTaskRunner
 
 	internal static string ResolvePowerShell7() => FindPowerShell7() ??
 		throw new PlatformNotSupportedException(OperatingSystem.IsWindows()
-			? "未找到 Windows 版 PowerShell 7 (pwsh)。请安装 PowerShell 7 或将其安装目录加入 PATH，然后重启应用。Windows 上执行 Linux 打包时，WSL Debian 内也需要安装 PowerShell 7。"
+			? "未找到 Windows 版 PowerShell 7 (pwsh)。请安装 PowerShell 7 或将其安装目录加入 PATH，然后重启应用。"
 			: "未找到 PowerShell 7 (pwsh)。请先安装 PowerShell 7 并将其目录加入 PATH，然后重启应用。");
 
 	private static string? FindPowerShell7()

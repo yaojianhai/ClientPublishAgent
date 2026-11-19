@@ -11,31 +11,16 @@
 
 $ErrorActionPreference = "Stop"
 $publishAotEnabled = $PublishAot -eq "true"
-Write-Host "[WSL] PowerShell 已进入 Linux 发布脚本。"
 . (Join-Path $PSScriptRoot "linux-common.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "publish-root-config.ps1")
 $RuntimeIdentifier = Get-LinuxRuntimeIdentifier -RuntimeIdentifier $RuntimeIdentifier
-$isWindowsHost = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
-$hostRuntimeIdentifier = if ($isWindowsHost) { "win-x64" } else { Get-LinuxRuntimeIdentifier }
+$hostRuntimeIdentifier = Get-LinuxRuntimeIdentifier
 $scriptsDirectory = Split-Path -Parent $PSScriptRoot
 $defaultSourceDirectory = Join-Path (Split-Path -Parent $scriptsDirectory) "src"
 $srcDirectory = if ([string]::IsNullOrWhiteSpace($SourceDirectory)) { $defaultSourceDirectory } else { [System.IO.Path]::GetFullPath($SourceDirectory) }
 $repoRoot = Split-Path -Parent $srcDirectory
 $rootDirectory = Resolve-DesktopPublishRootDirectory -RuntimeIdentifier $RuntimeIdentifier -RepositoryRoot $repoRoot -RootDirectory $RootDirectory
-if ($isWindowsHost) {
-	$wslParameters = @{
-		RuntimeIdentifier = $RuntimeIdentifier
-		RootDirectory = $rootDirectory
-		DownloadOpenClaw = $DownloadOpenClaw
-		DownloadNodeModules = $DownloadNodeModules
-		PublishAot = $publishAotEnabled
-	}
-	if (-not [string]::IsNullOrWhiteSpace($SourceDirectory)) { $wslParameters.SourceDirectory = $SourceDirectory }
-	Invoke-LinuxScriptInWsl -ScriptPath $PSCommandPath -Parameters $wslParameters
-	return
-}
-
-$hostRuntimeIdentifier = Get-LinuxRuntimeIdentifier
+Sync-DesktopSource -SourceDirectory $srcDirectory
 $env:DOTNET_ROOT = Join-Path $HOME "dotnet"
 $env:PATH = "$env:DOTNET_ROOT$([System.IO.Path]::PathSeparator)$env:PATH"
 $artifactsDirectory = Join-Path $rootDirectory "artifacts"

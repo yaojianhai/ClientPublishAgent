@@ -19,17 +19,9 @@ $backupScript = Join-Path (Split-Path -Parent $PSScriptRoot) "backup-staging-rel
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "publish-root-config.ps1")
 $RuntimeIdentifier = Get-LinuxRuntimeIdentifier -RuntimeIdentifier $RuntimeIdentifier
 $OssHost = Resolve-DesktopOssHost -RuntimeIdentifier $RuntimeIdentifier -OssHost $OssHost
-$PSBoundParameters["OssHost"] = $OssHost
 $scriptsDirectory = Split-Path -Parent $PSScriptRoot
 $repoRoot = if ([string]::IsNullOrWhiteSpace($SourceDirectory)) { Split-Path -Parent $scriptsDirectory } else { Split-Path -Parent ([System.IO.Path]::GetFullPath($SourceDirectory)) }
 $RootDirectory = Resolve-DesktopPublishRootDirectory -RuntimeIdentifier $RuntimeIdentifier -RepositoryRoot $repoRoot -RootDirectory $RootDirectory
-if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
-	if ($null -ne $BeforeBaselineCommit -or $null -ne $AfterBaselineCommit) { throw "基线提交回调只能在 Linux 中执行。" }
-	$PSBoundParameters["RuntimeIdentifier"] = $RuntimeIdentifier
-	$PSBoundParameters["RootDirectory"] = $RootDirectory
-	Invoke-LinuxScriptInWsl -ScriptPath $PSCommandPath -Parameters $PSBoundParameters
-	return
-}
 $hostRuntimeIdentifier = Get-LinuxRuntimeIdentifier
 
 $CurrentVersion = Read-LinuxSemanticVersion -Prompt "请输入当前版本号" -Value $CurrentVersion

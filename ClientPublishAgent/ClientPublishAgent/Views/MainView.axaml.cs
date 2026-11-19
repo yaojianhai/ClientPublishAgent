@@ -52,7 +52,7 @@ public partial class MainView : UserControl
             {
                 new TextBlock
                 {
-                    Text = "请确认已检查并备份发布目录。打包脚本可能清理暂存目录，并更新旧版本基线和差分产物。是否继续？",
+                    Text = "打包前将对源码仓库执行 git pull --ff-only。请确认已检查本地修改并备份发布目录；脚本可能清理暂存目录，更新旧版本基线和差分产物。是否继续？",
                     TextWrapping = Avalonia.Media.TextWrapping.Wrap
                 },
                 new StackPanel

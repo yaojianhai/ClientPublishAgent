@@ -382,6 +382,15 @@ finally
                 _ => "x64"
             };
             Check(viewModel.SelectedSystem == expectedSystem, "manual packaging system is fixed to the current host");
+            var linuxPlugin = TaskCatalog.Get("linux-package");
+            Check(linuxPlugin.Supports(NativeHost.Linux, "linux-x64") && linuxPlugin.Supports(NativeHost.Linux, "linux-arm64") &&
+                !linuxPlugin.Supports(NativeHost.Windows, "linux-x64") && !linuxPlugin.Supports(NativeHost.MacOS, "linux-x64"),
+                "Linux packaging accepts only Linux hosts and preserves both target architectures");
+            if (OperatingSystem.IsWindows())
+            {
+                try { linuxPlugin.Prepare(new PluginRequest("linux-package", AppContext.BaseDirectory, "linux-x64", "1.0.0", "1.0.1", "")); throw new Exception("FAIL: Linux packaging started on Windows"); }
+                catch (PlatformNotSupportedException) { }
+            }
             Check(viewModel.SelectedArchitecture == expectedArchitecture && viewModel.Architectures.SequenceEqual(["x64", "arm64"]),
                 "manual packaging offers mainstream architectures and defaults to the current host");
             var alternateArchitecture = expectedArchitecture == "x64" ? "arm64" : "x64";
@@ -1836,7 +1845,7 @@ finally
             catch (ArgumentException) { }
         }
         finally { if (Directory.Exists(link)) Directory.Delete(link); }
-        Check(TaskCatalog.Get("linux-package").Supports(NativeHost.Windows, "linux-x64"), "Linux wrapper supports Windows WSL host");
+        Check(!TaskCatalog.Get("linux-package").Supports(NativeHost.Windows, "linux-x64"), "Linux packaging rejects Windows hosts");
         Check(TaskCatalog.Get("linux-package").Supports(NativeHost.Linux, "linux-arm64"), "Linux arm64 catalog");
         Check(!TaskCatalog.Get("linux-package").Supports(NativeHost.MacOS, "linux-x64"), "Linux wrapper rejects macOS");
         Check(TaskCatalog.Get("macos-package").Supports(NativeHost.MacOS, "osx-arm64") &&
@@ -1857,37 +1866,8 @@ finally
             var nonAotCommand = TaskCatalog.Get("windows-package").Prepare(new PluginRequest("windows-package", root, "win-x64", "1.0.0", "1.0.1", "", PublishAot: false));
             aotIndex = nonAotCommand.Arguments.ToList().IndexOf("-PublishAot");
             Check(aotIndex >= 0 && nonAotCommand.Arguments[aotIndex + 1] == "false", "manual packaging forwards the non-AOT selection");
-            var linuxScripts = Path.Combine(root, "linux-package"); Directory.CreateDirectory(linuxScripts);
-            File.WriteAllText(Path.Combine(linuxScripts, "linux-publish&upgrade&package.ps1"), "exit 0");
-            var shellDirectory = Path.Combine(root, "test-pwsh"); Directory.CreateDirectory(shellDirectory);
-            var shellPath = Path.Combine(shellDirectory, "pwsh.exe"); File.WriteAllText(shellPath, "");
-            var previousPath = Environment.GetEnvironmentVariable("PATH");
-            try
-            {
-                Environment.SetEnvironmentVariable("PATH", shellDirectory + Path.PathSeparator + Environment.GetFolderPath(Environment.SpecialFolder.System));
-                var linuxCommand = TaskCatalog.Get("linux-package").Prepare(new PluginRequest("linux-package", root, "linux-x64", "1.0.0", "1.0.1", ""));
-                Check(linuxCommand.Executable == shellPath, "Linux plugin resolves PowerShell 7 from PATH");
-                var linuxAotIndex = linuxCommand.Arguments.ToList().IndexOf("-PublishAot");
-                Check(linuxAotIndex >= 0 && linuxCommand.Arguments[linuxAotIndex + 1] == "true", "Linux manual package defaults to AOT");
-                var linuxNonAot = TaskCatalog.Get("linux-package").Prepare(new PluginRequest("linux-package", root, "linux-x64", "1.0.0", "1.0.1", "", PublishAot: false));
-                linuxAotIndex = linuxNonAot.Arguments.ToList().IndexOf("-PublishAot");
-                Check(linuxAotIndex >= 0 && linuxNonAot.Arguments[linuxAotIndex + 1] == "false", "Linux manual package forwards non-AOT selection");
-                Environment.SetEnvironmentVariable("PATH", Environment.GetFolderPath(Environment.SpecialFolder.System));
-                var installed = new[] { Environment.SpecialFolder.ProgramFiles, Environment.SpecialFolder.ProgramFilesX86 }
-                    .Select(Environment.GetFolderPath).Where(p => !string.IsNullOrEmpty(p))
-                    .Select(p => Path.Combine(p, "PowerShell", "7", "pwsh.exe")).FirstOrDefault(File.Exists);
-                if (installed is null)
-                {
-                    try { TaskCatalog.Get("linux-package").Prepare(new PluginRequest("linux-package", root, "linux-x64", "1.0.0", "1.0.1", "")); throw new Exception("FAIL: Linux plugin accepted missing PowerShell 7"); }
-                    catch (PlatformNotSupportedException ex) { Check(ex.Message.Contains("PowerShell 7") && ex.Message.Contains("WSL Debian"), "missing PowerShell 7 explains Windows and WSL prerequisites"); }
-                }
-                else
-                {
-                    var linuxCommandFromInstall = TaskCatalog.Get("linux-package").Prepare(new PluginRequest("linux-package", root, "linux-x64", "1.0.0", "1.0.1", ""));
-                    Check(linuxCommandFromInstall.Executable == installed, "Linux plugin resolves PowerShell 7 from standard installation directory");
-                }
-            }
-            finally { Environment.SetEnvironmentVariable("PATH", previousPath); }
+            try { TaskCatalog.Get("linux-package").Prepare(new PluginRequest("linux-package", root, "linux-x64", "1.0.0", "1.0.1", "")); throw new Exception("FAIL: Linux packaging started on Windows"); }
+            catch (PlatformNotSupportedException) { }
         }
         store.Delete(stored.Id);
         Check(store.Search("", profile.Id).Count == 0, "session deletion persisted");

@@ -22,15 +22,6 @@ $NextVersion = Read-LinuxSemanticVersion -Prompt "请输入下一版本号" -Val
 $srcDirectory = if ([string]::IsNullOrWhiteSpace($SourceDirectory)) { Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "src" } else { [System.IO.Path]::GetFullPath($SourceDirectory) }
 $repoRoot = Split-Path -Parent $srcDirectory
 $RootDirectory = Resolve-DesktopPublishRootDirectory -RuntimeIdentifier $RuntimeIdentifier -RepositoryRoot $repoRoot -RootDirectory $RootDirectory
-if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
-	$parameters = @{ RuntimeIdentifier = $RuntimeIdentifier; CurrentVersion = $CurrentVersion; NextVersion = $NextVersion; BundleIdentifier = $BundleIdentifier }
-	$parameters.RootDirectory = $RootDirectory
-	if (-not [string]::IsNullOrWhiteSpace($SourceDirectory)) { $parameters.SourceDirectory = $SourceDirectory }
-	if (-not [string]::IsNullOrWhiteSpace($OssHost)) { $parameters.OssHost = $OssHost }
-	if (-not [string]::IsNullOrWhiteSpace($OutputDirectory)) { $parameters.OutputDirectory = $OutputDirectory }
-	Invoke-LinuxScriptInWsl -ScriptPath $PSCommandPath -Parameters $parameters
-	return
-}
 $upgradeScript = Join-Path $PSScriptRoot "upgrade-linux.ps1"
 $packageScript = Join-Path $PSScriptRoot "package-linux.ps1"
 $rootDirectory = $RootDirectory

@@ -1,5 +1,5 @@
 $ErrorActionPreference = "Stop"
-if (-not $IsLinux) { throw "Run this check with PowerShell 7 on Linux or WSL Debian." }
+if (-not $IsLinux) { throw "Run this check with PowerShell 7 on Linux." }
 $linuxScripts = Join-Path (Split-Path -Parent $PSScriptRoot) "ClientPublishAgent/Scripts/Desktop/linux-package"
 $root = Join-Path ([System.IO.Path]::GetTempPath()) ("linux-package-identity-" + [guid]::NewGuid().ToString("N"))
 $source = Join-Path $root "src"

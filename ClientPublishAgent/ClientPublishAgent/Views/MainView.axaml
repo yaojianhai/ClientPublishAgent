@@ -14,7 +14,7 @@
     <Grid RowDefinitions="Auto,*,Auto" Margin="24" RowSpacing="16">
         <StackPanel Spacing="4">
             <TextBlock Text="个人工作平台" FontSize="26" FontWeight="Bold" />
-            <TextBlock Text="跨平台任务插件 · 原生主机限制 / Windows WSL Debian · MarketServer" />
+            <TextBlock Text="跨平台任务插件 · 原生主机限制 · MarketServer" />
         </StackPanel>
 
         <Grid Grid.Row="1" ColumnDefinitions="360,*" ColumnSpacing="24">

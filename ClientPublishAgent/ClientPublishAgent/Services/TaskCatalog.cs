@@ -56,7 +56,7 @@ public static class TaskCatalog
     public static IReadOnlyList<ITaskPlugin> Plugins { get; } =
     [
         new ScriptPlugin("windows-package", "Windows x64 · NSIS", "win-package", "publish-upgrade-package-win-x64.ps1", ["win-x64"], [NativeHost.Windows]),
-        new ScriptPlugin("linux-package", "Linux x64/arm64 · dpkg (Windows: WSL Debian + pwsh)", "linux-package", "linux-publish&upgrade&package.ps1", ["linux-x64", "linux-arm64"], [NativeHost.Windows, NativeHost.Linux]),
+        new ScriptPlugin("linux-package", "Linux x64/arm64 · 原生 dpkg", "linux-package", "linux-publish&upgrade&package.ps1", ["linux-x64", "linux-arm64"], [NativeHost.Linux]),
         new ScriptPlugin("macos-package", "macOS x64/arm64 · native hdiutil", "mac-package", "mac-publish&upgrade&package.ps1", ["osx-x64", "osx-arm64"], [NativeHost.MacOS]),
         new MarketServerPlugin()
     ];
@@ -99,7 +99,7 @@ public static class TaskCatalog
             if (!Supports(Host, request.RuntimeIdentifier)) throw new PlatformNotSupportedException("Invalid native host/runtime combination for " + Id);
             ValidateRequest(request);
             var shell = id == "windows-package" ? PowerShellTaskRunner.ResolvePowerShell() : PowerShellTaskRunner.ResolvePowerShell7();
-            if (id == "linux-package") RequireCommand(Host == NativeHost.Windows ? "wsl" : "dpkg-deb");
+            if (id == "linux-package") RequireCommand("dpkg-deb");
             if (id == "macos-package") RequireCommand("hdiutil");
             var directory = Path.Combine(Path.GetFullPath(request.ScriptsRoot), folder);
             var path = Path.Combine(directory, script);

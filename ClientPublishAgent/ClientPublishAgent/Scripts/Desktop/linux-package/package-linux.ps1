@@ -17,12 +17,6 @@ $RuntimeIdentifier = Get-LinuxRuntimeIdentifier -RuntimeIdentifier $RuntimeIdent
 $scriptsDirectory = Split-Path -Parent $PSScriptRoot
 $repoRoot = if ([string]::IsNullOrWhiteSpace($SourceDirectory)) { Split-Path -Parent $scriptsDirectory } else { Split-Path -Parent ([System.IO.Path]::GetFullPath($SourceDirectory)) }
 $RootDirectory = Resolve-DesktopPublishRootDirectory -RuntimeIdentifier $RuntimeIdentifier -RepositoryRoot $repoRoot -RootDirectory $RootDirectory
-if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
-	$PSBoundParameters["RuntimeIdentifier"] = $RuntimeIdentifier
-	$PSBoundParameters["RootDirectory"] = $RootDirectory
-	Invoke-LinuxScriptInWsl -ScriptPath $PSCommandPath -Parameters $PSBoundParameters
-	return
-}
 foreach ($command in "dpkg-deb", "readelf", "find", "chmod", "ln") {
 	if (-not (Get-Command $command -CommandType Application -ErrorAction SilentlyContinue)) { throw "未找到 Linux 打包所需命令：$command" }
 }
@@ -69,7 +63,7 @@ foreach ($relativeExecutablePath in $relativeExecutablePaths) {
 
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $packageIdentifier = [guid]::NewGuid().ToString("N")
-# WSL 的 Windows 挂载目录可能无法保存 Unix 权限，包目录必须在 Linux 临时目录构建。
+# 在 Linux 临时目录构建，以确保包目录支持 Unix 权限。
 $stagingDirectory = Join-Path ([System.IO.Path]::GetTempPath()) (".linux-package-" + $packageIdentifier)
 $debianArchitecture = switch ($RuntimeIdentifier) { "linux-arm64" { "arm64"; break } "linux-x64" { "amd64"; break } }
 $packageDirectory = Join-Path $stagingDirectory "package"

@@ -1,3 +1,17 @@
+function Sync-DesktopSource {
+	param([Parameter(Mandatory)][string]$SourceDirectory)
+	if (-not (Test-Path -LiteralPath $SourceDirectory -PathType Container)) {
+		throw "源码目录不存在，无法拉取最新代码：$SourceDirectory"
+	}
+	if (-not (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
+		throw "未找到 Git，请先安装 Git 并配置 PATH。"
+	}
+	Write-Host "打包前拉取源码（仅允许快进）：$SourceDirectory"
+	& git -C $SourceDirectory pull --ff-only
+	if ($LASTEXITCODE -ne 0) { throw "Git 拉取失败（退出代码：$LASTEXITCODE），已停止发布。请检查网络、认证、上游分支及本地修改。" }
+	Write-Host "源码拉取完成。"
+}
+
 function Resolve-DesktopPublishRootDirectory {
 	param(
 		[Parameter(Mandatory)][ValidateSet("linux-arm64", "linux-x64", "osx-arm64", "osx-x64")][string]$RuntimeIdentifier,

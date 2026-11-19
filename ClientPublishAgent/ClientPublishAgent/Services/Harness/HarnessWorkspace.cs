@@ -820,6 +820,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
             }
             return new GenericSnapshot(Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(string.Join("\n", hashes)))),
                 command.Directory, "输出根目录：" + command.OutputRoot + (effectiveOssHost.Length > 0 ? "\n升级地址：" + effectiveOssHost : "") + "\n" + TaskCatalog.Get(request.Task).Description +
+                (request.Task == "marketserver" ? "" : "\n发布前会在源码仓库执行 git pull --ff-only，修改本地检出并访问远端；拉取失败会停止发布。") +
                 "\n执行可信脚本/构建依赖（非沙箱），可能删除发布目录、下载文件、访问网络。请备份；源代码/依赖变化无法全部锁定。");
         }
         throw new InvalidOperationException("Unsupported approval tool: " + name);

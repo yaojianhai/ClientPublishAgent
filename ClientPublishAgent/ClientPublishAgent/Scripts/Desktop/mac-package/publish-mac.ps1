@@ -21,6 +21,7 @@ if ([string]::IsNullOrWhiteSpace($RuntimeIdentifier)) {
 $scriptsDirectory = Split-Path -Parent $PSScriptRoot
 $srcDirectory = if ([string]::IsNullOrWhiteSpace($SourceDirectory)) { Join-Path (Split-Path -Parent $scriptsDirectory) "src" } else { [System.IO.Path]::GetFullPath($SourceDirectory) }
 $repoRoot = Split-Path -Parent $srcDirectory
+Sync-DesktopSource -SourceDirectory $srcDirectory
 $rootDirectory = if ([string]::IsNullOrWhiteSpace($RootDirectory)) { Resolve-DesktopPublishRootDirectory -RuntimeIdentifier $RuntimeIdentifier -RepositoryRoot $repoRoot } else { $RootDirectory }
 $publishDirectory = Join-Path $rootDirectory "StagingRelease"
 $updaterDirectory = Join-Path $publishDirectory "update"

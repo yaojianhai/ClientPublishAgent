@@ -9,13 +9,11 @@ Linux deb 应用识别与联网策略
 
 Linux 发布脚本按宿主系统执行
 ----------------------------
-- Windows：publish-linux.ps1 将完整 Linux 发布流程转交给 WSL Debian 执行；Windows 负责传递脚本参数和路径。
-- WSL 启动时先 source ~/.bashrc，再启动 PowerShell 7，以便发布脚本继承用户配置的环境变量。
-- Linux：在当前系统原生运行 dotnet、Clang 和 Linux 发布工具，不再启动 WSL。
-- linux-publish&upgrade&package.ps1 等组合入口沿用此规则：Windows 发布交给 WSL；后续打包/升级入口也会在 Windows 下各自交给 WSL，Linux 则原生执行。
+- Linux 发布、升级和 deb 打包脚本仅在 Linux 系统原生运行，不支持 Windows 或 macOS 主机执行。
+- Windows、Linux 和 macOS 的源码发布入口会在清理暂存目录和编译之前对源码目录执行 git pull --ff-only。拉取失败会停止发布；Git 使用当前分支的上游及本机认证配置，不自动提交、重置或清理本地修改。仅对已有暂存目录制包的独立脚本不会重新编译源码。
 - 手工打包界面的 Native AOT 选项默认开启；关闭后发布脚本传递 PublishAot=false，并同时关闭 Linux trimming。脚本参数可用 -PublishAot true/false 显式设置。
-- WSL Debian 需安装 PowerShell 7、.NET SDK、Clang/LLVM、objcopy、tar；制 deb 还需 dpkg-deb、readelf、find、chmod、ln。
-- 源码目录、根目录或输出目录可传 Windows 绝对路径；Windows 分支会转换成 WSL 路径。Linux 分支直接使用 Linux 路径。
+- Linux 需安装 Git、PowerShell 7、.NET SDK、Clang/LLVM、objcopy、tar；制 deb 还需 dpkg-deb、readelf、find、chmod、ln。Git 需配置仓库信任及远端认证。
+- 源码目录、根目录及输出目录使用 Linux 路径。
 - 打包目录配置中的升级基础地址保存在 win-package/publish-config.json 的 OssHost；Windows、Linux、macOS 升级脚本自动追加目标运行时，例如 linux-arm64。旧配置未设置时默认使用 https://cloud.gildata.com/gil/upgrade/WarrenQ/WarrenqF1，Linux/macOS 原先的内网默认地址不再使用；如需内网地址请在页面设置。脚本显式传入 -OssHost 时使用完整地址，不追加运行时。
 
 本次打包规则
@@ -67,7 +65,7 @@ https://github.com/linuxdeepin/deepin-defender/blob/9bdab7a741f38ff3d2047b0813a8
 5. 验证 deb 升级后仍可联网；安全中心已明确禁止的应用应保持禁止。
    若仍无法识别，收集系统版本、安全中心版本与上述结果，确认厂商具体识别/授权接口。
 
-回归检查（PowerShell 7，Linux 或 WSL Debian）
+回归检查（PowerShell 7，Linux）
 --------------------------------------------
 在 ClientPublishAgent 目录运行：
   pwsh -NoProfile -File .\ClientPublishAgent.HarnessChecks\CheckLinuxPackageIdentity.ps1
@@ -75,10 +73,3 @@ https://github.com/linuxdeepin/deepin-defender/blob/9bdab7a741f38ff3d2047b0813a8
 身份检查使用隔离临时目录，构造 amd64/arm64 deb 并验证内容、脚本权限、父子进程身份、
 启动参数和用户副本升级行为；交叉架构 ELF 仅用于制包测试，不执行，也不安装到当前系统。
 需要现有制包工具和 gcc。上述检查不能替代目标 UOS/麒麟安全中心实机验收。
-
-Windows → WSL 日志编码
------------------------
-Windows WSL 启动诊断通过 UTF-16LE 输出，而 Linux 子进程日志为 UTF-8；
-linux-common.ps1 会按行分别解码，保持 Linux stdout/stderr 和退出代码，并仅显示一次重复的
-localhost 代理提示。该提示是 WSL 网络配置警告，不是打包失败；需要 WSL 访问 Windows 本机代理时，
-应另行按机器策略配置 WSL 网络/代理，不要通过关闭应用联网策略处理。

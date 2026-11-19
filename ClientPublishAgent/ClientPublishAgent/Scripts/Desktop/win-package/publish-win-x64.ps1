@@ -25,6 +25,8 @@ $launcherProject = Join-Path $srcDirectory "OpenClaw\WarrenqF1.OpenClawLauncher\
 $nodePlatformDirectory = "windows"
 $nodeSourceDirectory = Join-Path $repoRoot "Dependency\Node\$nodePlatformDirectory"
 $scriptsDirectory = Split-Path -Parent $PSScriptRoot
+. (Join-Path $scriptsDirectory "publish-root-config.ps1")
+Sync-DesktopSource -SourceDirectory $srcDirectory
 . (Join-Path $scriptsDirectory "publish-openclaw.ps1")
 . (Join-Path $scriptsDirectory "copy-office.ps1")
 
