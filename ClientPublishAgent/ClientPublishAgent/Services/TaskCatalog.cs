@@ -7,7 +7,7 @@ using System.Text.RegularExpressions;
 namespace ClientPublishAgent.Services;
 
 public enum NativeHost { Windows, Linux, MacOS }
-public sealed record PluginRequest(string Task, string ScriptsRoot, string RuntimeIdentifier, string CurrentVersion, string NextVersion, string OssHost, string SourceDirectory = "", string PackageType = "upgrade-installer", bool PublishAot = true, string SigningIdentity = "", string NotaryKeychainProfile = "");
+public sealed record PluginRequest(string Task, string ScriptsRoot, string RuntimeIdentifier, string CurrentVersion, string NextVersion, string OssHost, string SourceDirectory = "", string PackageType = "upgrade-installer", bool PublishAot = true, string? SigningIdentity = null, string? NotaryKeychainProfile = null);
 public sealed record PluginCommand(string Executable, IReadOnlyList<string> Arguments, string Directory, string OutputRoot,
     string? ScriptPath = null, string? SourceDirectory = null);
 public interface ITaskPlugin
@@ -113,9 +113,9 @@ public static class TaskCatalog
             args.AddRange(["-RuntimeIdentifier", request.RuntimeIdentifier, "-PackageType", packageType]);
             if (id is "windows-package" or "linux-package" or "macos-package")
                 args.AddRange(["-PublishAot", request.PublishAot.ToString().ToLowerInvariant()]);
-            if (id == "macos-package" && !string.IsNullOrWhiteSpace(request.SigningIdentity))
+            if (id == "macos-package" && request.SigningIdentity is not null)
                 args.AddRange(["-SigningIdentity", request.SigningIdentity.Trim()]);
-            if (id == "macos-package" && !string.IsNullOrWhiteSpace(request.NotaryKeychainProfile))
+            if (id == "macos-package" && request.NotaryKeychainProfile is not null)
                 args.AddRange(["-NotaryKeychainProfile", request.NotaryKeychainProfile.Trim()]);
             var ossHost = GetDesktopOssHost(request.ScriptsRoot, request.RuntimeIdentifier, request.OssHost);
             args.AddRange(["-OssHost", ossHost]);

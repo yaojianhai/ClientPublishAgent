@@ -26,7 +26,7 @@ if (-not [string]::IsNullOrWhiteSpace($RuntimeIdentifier)) {
 }
 if (-not [string]::IsNullOrWhiteSpace($OssHost)) { $upgradeParameters.OssHost = $OssHost }
 if (-not [string]::IsNullOrWhiteSpace($OutputDirectory)) { $packageParameters.OutputDirectory = $OutputDirectory }
-if (-not [string]::IsNullOrWhiteSpace($SigningIdentity)) { $packageParameters.SigningIdentity = $SigningIdentity }
-if (-not [string]::IsNullOrWhiteSpace($NotaryKeychainProfile)) { $packageParameters.NotaryKeychainProfile = $NotaryKeychainProfile }
+$packageParameters.SigningIdentity = $SigningIdentity
+$packageParameters.NotaryKeychainProfile = $NotaryKeychainProfile
 & $upgradeScript @upgradeParameters
 & $packageScript @packageParameters

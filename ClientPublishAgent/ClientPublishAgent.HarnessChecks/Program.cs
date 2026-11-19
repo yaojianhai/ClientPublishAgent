@@ -59,6 +59,11 @@ try
         await CheckPackagingUiAsync(ct);
         return;
     }
+    if (args.Contains("--mac-signing-settings", StringComparer.Ordinal))
+    {
+        await CheckMacSigningSettingsAsync(root);
+        return;
+    }
     if (args.Contains("--attribution-json", StringComparer.Ordinal))
     {
         CheckRequestSourceAttributionSerialization();
@@ -315,6 +320,48 @@ finally
         await completion.Task.WaitAsync(ct);
         thread.Join();
         Console.WriteLine("Packaging window visibility checks passed.");
+    }
+
+    static async Task CheckMacSigningSettingsAsync(string root)
+    {
+        var path = Path.Combine(root, "signing-settings", "settings.json");
+        var oldIdentity = Environment.GetEnvironmentVariable("APPLE_SIGNING_IDENTITY");
+        var oldProfile = Environment.GetEnvironmentVariable("APPLE_NOTARY_PROFILE");
+        try
+        {
+            Environment.SetEnvironmentVariable("APPLE_SIGNING_IDENTITY", "environment identity");
+            Environment.SetEnvironmentVariable("APPLE_NOTARY_PROFILE", "environment profile");
+            var first = new MainViewModel(new MacSigningSettingsStore(path));
+            Check(first.SigningIdentity == "environment identity" && first.NotaryKeychainProfile == "environment profile" && !File.Exists(path), "initial environment defaults");
+            first.SigningIdentity = "Developer ID Application: Example (TEAM123)";
+            first.NotaryKeychainProfile = "example-notary";
+            Check(first.SigningSettingsStatus.Contains("已保存"), "successful edit reports local persistence");
+            await first.CloseAsync();
+            var restored = new MainViewModel(new MacSigningSettingsStore(path));
+            Check(restored.SigningIdentity == "Developer ID Application: Example (TEAM123)" && restored.NotaryKeychainProfile == "example-notary", "saved values restored instead of environment defaults");
+            restored.SigningIdentity = "";
+            restored.NotaryKeychainProfile = "";
+            await restored.CloseAsync();
+            var cleared = new MainViewModel(new MacSigningSettingsStore(path));
+            Check(cleared.SigningIdentity == "" && cleared.NotaryKeychainProfile == "", "explicitly cleared values persist");
+            await cleared.CloseAsync();
+            await File.WriteAllTextAsync(path, "not valid json");
+            var invalid = new MainViewModel(new MacSigningSettingsStore(path));
+            Check(invalid.SigningSettingsStatus.Contains("读取") && invalid.SigningSettingsStatus.Contains("失败"), "load errors are visible");
+            invalid.SigningIdentity = "edited";
+            Check(await File.ReadAllTextAsync(path) == "not valid json", "corrupt configuration is not overwritten");
+            await invalid.CloseAsync();
+            var blocked = new MainViewModel(new MacSigningSettingsStore(Path.Combine(path, "settings.json")));
+            blocked.SigningIdentity = "edited";
+            Check(blocked.SigningSettingsStatus.Contains("保存") && blocked.SigningSettingsStatus.Contains("失败"), "save errors are visible");
+            await blocked.CloseAsync();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("APPLE_SIGNING_IDENTITY", oldIdentity);
+            Environment.SetEnvironmentVariable("APPLE_NOTARY_PROFILE", oldProfile);
+        }
+        Console.WriteLine("macOS signing settings checks passed.");
     }
 
     static async Task CheckPackagingTargetAsync()

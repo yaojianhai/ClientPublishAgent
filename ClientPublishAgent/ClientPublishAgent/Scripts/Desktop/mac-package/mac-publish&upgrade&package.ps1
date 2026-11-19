@@ -63,8 +63,8 @@ if (-not [string]::IsNullOrWhiteSpace($SourceDirectory)) {
 }
 if (-not [string]::IsNullOrWhiteSpace($OssHost)) { $upgradeParameters.OssHost = $OssHost }
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { $packageParameters.OutputDirectory = Join-Path $rootDirectory "output" } else { $packageParameters.OutputDirectory = $OutputDirectory }
-if (-not [string]::IsNullOrWhiteSpace($SigningIdentity)) { $packageParameters.SigningIdentity = $SigningIdentity }
-if (-not [string]::IsNullOrWhiteSpace($NotaryKeychainProfile)) { $packageParameters.NotaryKeychainProfile = $NotaryKeychainProfile }
+$packageParameters.SigningIdentity = $SigningIdentity
+$packageParameters.NotaryKeychainProfile = $NotaryKeychainProfile
 & $publishScript @publishParameters
 if ($PackageType -in "upgrade", "upgrade-installer") { & $upgradeScript @upgradeParameters }
 if ($PackageType -eq "installer") {

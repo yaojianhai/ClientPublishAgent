@@ -20,6 +20,8 @@ public partial class MainViewModel : ViewModelBase
 {
     private readonly PowerShellTaskRunner _runner = new();
     private readonly PackagingPathsStore _pathsStore = new();
+    private readonly MacSigningSettingsStore _signingSettings;
+    private bool _signingSettingsReady;
     private CancellationTokenSource? _cancellation;
 
     public string[] Architectures { get; } = ["x64", "arm64"];
@@ -71,6 +73,7 @@ public partial class MainViewModel : ViewModelBase
     }
     [ObservableProperty] public partial string SigningIdentity { get; set; } = Environment.GetEnvironmentVariable("APPLE_SIGNING_IDENTITY") ?? "";
     [ObservableProperty] public partial string NotaryKeychainProfile { get; set; } = Environment.GetEnvironmentVariable("APPLE_NOTARY_PROFILE") ?? "";
+    [ObservableProperty] public partial string SigningSettingsStatus { get; set; } = "";
     [ObservableProperty] public partial bool IsConfirmed { get; set; }
     [ObservableProperty] public partial bool PublishAot { get; set; } = true;
     [ObservableProperty] public partial bool IsRunning { get; set; }
@@ -83,8 +86,25 @@ public partial class MainViewModel : ViewModelBase
     public string MarketServerScriptsDirectory => Path.Combine(AppContext.BaseDirectory, "Scripts", "MarketServer");
     public string SourceDirectory => PackagingPathProvider.SourceDirectory;
     public bool IsMacOSSelected => SelectedSystem == "macOS";
-    public MainViewModel()
+    public MainViewModel() : this(new MacSigningSettingsStore()) { }
+
+    public MainViewModel(MacSigningSettingsStore signingSettings)
     {
+        _signingSettings = signingSettings;
+        try
+        {
+            var saved = _signingSettings.Load();
+            if (saved is not null)
+            {
+                SigningIdentity = saved.SigningIdentity ?? throw new InvalidDataException("签名身份缺失。");
+                NotaryKeychainProfile = saved.NotaryKeychainProfile ?? throw new InvalidDataException("公证配置名称缺失。");
+            }
+            _signingSettingsReady = true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
+        {
+            SigningSettingsStatus = "读取 macOS 签名配置失败，自动保存已暂停：" + ex.Message;
+        }
         WindowsPublishConfigStore.ConfigurationChanged += PublishConfigurationChanged;
         _runner.InputAvailabilityChanged += available => Dispatcher.UIThread.Invoke(() =>
         {
@@ -92,6 +112,23 @@ public partial class MainViewModel : ViewModelBase
             if (!available) ScriptInput = "";
         });
         RefreshVersions();
+    }
+
+    partial void OnSigningIdentityChanged(string value) => SaveSigningSettings();
+    partial void OnNotaryKeychainProfileChanged(string value) => SaveSigningSettings();
+
+    private void SaveSigningSettings()
+    {
+        if (!_signingSettingsReady) return;
+        try
+        {
+            _signingSettings.Save(SigningIdentity ?? "", NotaryKeychainProfile ?? "");
+            SigningSettingsStatus = "签名身份和公证配置名称已保存到本机。";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException or ArgumentException)
+        {
+            SigningSettingsStatus = "保存 macOS 签名配置失败：" + ex.Message;
+        }
     }
 
     private bool TryGetPluginSelection(out string plugin, out string runtime, out string reason)

@@ -35,6 +35,7 @@
                     <TextBox Text="{Binding SigningIdentity}" PlaceholderText="Developer ID Application: 团队名称 (TEAMID)" IsVisible="{Binding IsMacOSSelected}" />
                     <TextBlock Text="notarytool 钥匙串配置名称" FontWeight="SemiBold" IsVisible="{Binding IsMacOSSelected}" />
                     <TextBox Text="{Binding NotaryKeychainProfile}" PlaceholderText="例如 WarrenqF1-notary" IsVisible="{Binding IsMacOSSelected}" />
+                    <TextBlock Text="{Binding SigningSettingsStatus}" TextWrapping="Wrap" IsVisible="{Binding IsMacOSSelected}" />
                     <TextBlock Text="需在 Mac 钥匙串预先安装 Developer ID Application 证书，并用 xcrun notarytool store-credentials 创建配置。填写配置名称，不要填写 Apple ID 密码。两项都填写后会签名 app、提交公证、装订 app 票据，再签名、公证并装订 DMG；两项都留空则生成未签名测试包。" TextWrapping="Wrap" IsVisible="{Binding IsMacOSSelected}" />
                     <Button Content="执行任务" Click="RunTaskClicked" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                 </StackPanel>
