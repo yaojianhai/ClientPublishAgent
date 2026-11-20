@@ -54,6 +54,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
     private readonly HarnessSettings _settings;
     private readonly Func<string> _sourceDirectoryProvider;
     private readonly Func<string> _desktopScriptsRootProvider;
+    private readonly Func<DesktopPackagingOptions> _desktopPackagingOptionsProvider;
     private readonly Action<string> _output;
     private readonly SemaphoreSlim _mutex = new(1, 1);
     private readonly SemaphoreSlim _scriptMutex = new(1, 1);
@@ -137,7 +138,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
     public IReadOnlyList<HarnessApproval> PendingApprovals { get { lock (_sync) return _pending.Select(p => p.Display).Concat(_genericPending.Select(p => p.Display)).ToArray(); } }
 
     public HarnessWorkspace(HarnessSettings settings, Action<string> scriptOutput, Func<string>? sourceDirectoryProvider = null,
-        Func<string>? desktopScriptsRootProvider = null)
+        Func<string>? desktopScriptsRootProvider = null, Func<DesktopPackagingOptions>? desktopPackagingOptionsProvider = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(scriptOutput);
@@ -166,6 +167,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
         _apiKey = key;
         _sourceDirectoryProvider = sourceDirectoryProvider ?? (() => PackagingPathProvider.SourceDirectory);
         _desktopScriptsRootProvider = desktopScriptsRootProvider ?? (() => Path.Combine(AppContext.BaseDirectory, "Scripts", "Desktop"));
+        _desktopPackagingOptionsProvider = desktopPackagingOptionsProvider ?? DefaultDesktopPackagingOptions;
         _settings = settings with { ScriptsDirectory = string.IsNullOrWhiteSpace(settings.ScriptsDirectory) ? "" : Path.GetFullPath(settings.ScriptsDirectory.Trim()) };
         if (settings.Profile is { } profile)
         {
@@ -754,7 +756,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
 
     private Task<string> PublishLatestDesktopAsync(
         [Description("Explicit next version x.y.z, or empty when not specified by the user")] string nextVersion = "",
-        [Description("Requested architectures separated by commas: x64, arm64 (arm means arm64); or empty for the current OS architecture")] string architecture = "",
+        [Description("Requested architectures separated by commas: x64, arm64 (arm means arm64); or empty for the manual packaging selection")] string architecture = "",
         [Description("Download OpenClaw only when explicitly requested by the user; otherwise false")] bool downloadOpenClaw = false,
         [Description("Download node_modules only when explicitly requested by the user; otherwise false")] bool downloadNodeModules = false,
         CancellationToken cancellationToken = default) =>
@@ -764,6 +766,15 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
     private static string ResolveAgentOssHost(string task, string runtimeIdentifier, string ossHost) =>
         task == "marketserver" ? ossHost : TaskCatalog.GetDesktopOssHost(
             Path.Combine(AppContext.BaseDirectory, "Scripts", "Desktop"), runtimeIdentifier, ossHost);
+
+    private static DesktopPackagingOptions DefaultDesktopPackagingOptions()
+    {
+        var architecture = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64 ? "arm64" : "x64";
+        var signing = TaskCatalog.Host == NativeHost.MacOS ? new MacSigningSettingsStore().Load() : null;
+        return new DesktopPackagingOptions(architecture, true,
+            signing is null ? Environment.GetEnvironmentVariable("APPLE_SIGNING_IDENTITY") ?? "" : signing.SigningIdentity ?? throw new InvalidDataException("macOS 签名身份缺失。"),
+            signing is null ? Environment.GetEnvironmentVariable("APPLE_NOTARY_PROFILE") ?? "" : signing.NotaryKeychainProfile ?? throw new InvalidDataException("macOS 公证配置名称缺失。"));
+    }
 
     private static string CanonicalArguments(IDictionary<string, object?>? arguments) =>
         JsonSerializer.Serialize((arguments ?? new Dictionary<string, object?>()).OrderBy(p => p.Key, StringComparer.Ordinal)
@@ -815,17 +826,12 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
 
     private PluginRequest LatestDesktopRequest(JsonElement arguments)
     {
+        var options = _desktopPackagingOptionsProvider();
         string Get(string name) => arguments.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()! : throw new ArgumentException("Invalid tool argument: " + name);
         var architecture = Get("architecture").Trim().ToLowerInvariant();
         if (architecture == "arm") architecture = "arm64";
-        if (architecture.Length == 0)
-            architecture = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture switch
-            {
-                System.Runtime.InteropServices.Architecture.X64 => "x64",
-                System.Runtime.InteropServices.Architecture.Arm64 => "arm64",
-                _ => throw new PlatformNotSupportedException("当前系统的 CPU 架构不支持桌面打包。")
-            };
+        if (architecture.Length == 0) architecture = options.Architecture;
         if (architecture is not ("x64" or "arm64")) throw new ArgumentException("CPU 架构必须为 x64 或 arm64。");
         var (task, runtime) = TaskCatalog.Host switch
         {
@@ -846,16 +852,13 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
         var notaryProfile = (string?)null;
         if (task == "macos-package")
         {
-            var signing = new MacSigningSettingsStore().Load();
-            signingIdentity = signing is null ? Environment.GetEnvironmentVariable("APPLE_SIGNING_IDENTITY") ?? "" :
-                signing.SigningIdentity ?? throw new InvalidDataException("macOS 签名身份缺失。");
-            notaryProfile = signing is null ? Environment.GetEnvironmentVariable("APPLE_NOTARY_PROFILE") ?? "" :
-                signing.NotaryKeychainProfile ?? throw new InvalidDataException("macOS 公证配置名称缺失。");
+            signingIdentity = options.SigningIdentity;
+            notaryProfile = options.NotaryKeychainProfile;
             if (string.IsNullOrWhiteSpace(signingIdentity) != string.IsNullOrWhiteSpace(notaryProfile))
                 throw new InvalidOperationException("macOS 完整分发要求同时填写签名身份和公证配置名称，或两项均留空。");
         }
         var request = new PluginRequest(task, scriptsRoot, runtime, versions.CurrentVersion, next, "",
-            _sourceDirectoryProvider(), "upgrade-installer", true, signingIdentity, notaryProfile,
+            _sourceDirectoryProvider(), "upgrade-installer", options.PublishAot, signingIdentity, notaryProfile,
             arguments.GetProperty("downloadOpenClaw").GetBoolean(), arguments.GetProperty("downloadNodeModules").GetBoolean());
         TaskCatalog.ValidateRequest(request);
         var target = Version.Parse(request.NextVersion);
@@ -959,6 +962,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
                 command.OutputRoot,
                 "Task:" + request.Task + "; Runtime:" + request.RuntimeIdentifier + "; Versions:" + request.CurrentVersion + ":" + request.NextVersion,
                 "Signing:" + request.SigningIdentity + "; Notary:" + request.NotaryKeychainProfile,
+                "PublishAot:" + request.PublishAot,
                 "RefreshOpenClaw:" + request.RefreshOpenClaw + "; RefreshNodeModules:" + request.RefreshNodeModules,
                 "OssHost:" + effectiveOssHost,
                 "SourceDirectory:" + Path.GetFullPath(request.SourceDirectory)
@@ -972,7 +976,8 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
             {
                 paths = paths.Append(Path.Combine(request.ScriptsRoot, "publish-root-config.ps1")).ToArray();
                 if (name == "publish_latest_desktop_packages")
-                    paths = paths.Append(Path.Combine(request.ScriptsRoot, "publish-openclaw.ps1")).ToArray();
+                    paths = paths.Append(Path.Combine(request.ScriptsRoot, "publish-openclaw.ps1"))
+                        .Append(Path.Combine(request.ScriptsRoot, "win-package", "publish-config.json")).Distinct(StringComparer.Ordinal).ToArray();
             }
             if (paths.Length > 500) throw new InvalidOperationException("Too many plugin dependencies.");
             foreach (var path in paths)
@@ -982,6 +987,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
             }
             return new GenericSnapshot(Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(string.Join("\n", hashes)))),
                 command.Directory, "输出根目录：" + command.OutputRoot + "\n目标平台：" + request.RuntimeIdentifier + "\n当前版本：" + request.CurrentVersion + "\n下次版本：" + request.NextVersion +
+                (name == "publish_latest_desktop_packages" ? "\nNative AOT：" + (request.PublishAot ? "开启" : "关闭") : "") +
                 (name == "publish_latest_desktop_packages" ? "\nOpenClaw：" + (request.RefreshOpenClaw == true ? "重新下载" : "使用缓存，缺失时下载") + "\nnode_modules：" + (request.RefreshNodeModules == true ? "重新下载" : "使用缓存，缺失时下载") : "") + (effectiveOssHost.Length > 0 ? "\n升级地址：" + effectiveOssHost : "") +
                 (name == "publish_latest_desktop_packages" && request.Task == "macos-package" ?
                     (string.IsNullOrWhiteSpace(request.SigningIdentity) ? "\nmacOS：未签名测试包。" : "\nmacOS 签名身份：" + request.SigningIdentity + "\n公证配置：" + request.NotaryKeychainProfile) : "") + "\n" + TaskCatalog.Get(request.Task).Description +
@@ -1171,7 +1177,11 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
                     locks.Add(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read));
                 locks.Add(new FileStream(Path.Combine(request.ScriptsRoot, "publish-root-config.ps1"), FileMode.Open, FileAccess.Read, FileShare.Read));
                 if (name == "publish_latest_desktop_packages")
+                {
                     locks.Add(new FileStream(Path.Combine(request.ScriptsRoot, "publish-openclaw.ps1"), FileMode.Open, FileAccess.Read, FileShare.Read));
+                    if (request.Task != "windows-package")
+                        locks.Add(new FileStream(Path.Combine(request.ScriptsRoot, "win-package", "publish-config.json"), FileMode.Open, FileAccess.Read, FileShare.Read));
+                }
             }
             if (request.Task == "marketserver")
                 locks.Add(new FileStream(Path.Combine(request.SourceDirectory, "WarrenqF1.MarketServer", "WarrenqF1.MarketServer.csproj"), FileMode.Open, FileAccess.Read, FileShare.Read));

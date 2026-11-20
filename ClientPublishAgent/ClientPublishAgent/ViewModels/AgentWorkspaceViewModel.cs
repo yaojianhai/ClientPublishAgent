@@ -29,6 +29,7 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 	private bool _needsInitialTitle;
 	private readonly StringBuilder _transcript = new();
 	private readonly StringBuilder _localLog = new();
+	public Func<DesktopPackagingOptions>? DesktopPackagingOptionsProvider { get; set; }
 	private ChatEntryViewModel? _assistantEntry;
 	public ObservableCollection<ChatEntryViewModel> ChatItems { get; } = [];
 	public bool IsChatEmpty => ChatItems.Count == 0;
@@ -374,7 +375,8 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 			var stored = restore ? _store!.Load(selectedHistory!.Id) : null;
 			if (stored is not null) PlatformStore.ValidateBinding(stored, profile);
 			var settings = new HarnessSettings(profile.Endpoint, profile.Model, profile.KeyEnvironmentVariable, profile.ScriptsDirectory, profile);
-			_workspace = new HarnessWorkspace(settings, line => Dispatcher.UIThread.Invoke(() => AppendTaskLog(line)));
+			_workspace = new HarnessWorkspace(settings, line => Dispatcher.UIThread.Invoke(() => AppendTaskLog(line)),
+				desktopPackagingOptionsProvider: DesktopPackagingOptionsProvider);
 			_workspace.ScriptInputAvailabilityChanged += ScriptInputAvailabilityChanged;
 			if (stored is not null) await _workspace.RestoreAsync(stored, profile);
 			else await _workspace.InitializeAsync();

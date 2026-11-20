@@ -66,6 +66,11 @@ try
         model.AssertHealthy();
         return;
     }
+    if (args.Contains("--agent-packaging-ui", StringComparer.Ordinal))
+    {
+        await CheckAgentPackagingUiAsync(root, ct);
+        return;
+    }
     if (args.Contains("--packaging-ui", StringComparer.Ordinal))
     {
         await CheckPackagingUiAsync(ct);
@@ -279,6 +284,39 @@ finally
             "Linux POSIX output root preserves its path format");
     }
 
+    static async Task CheckAgentPackagingUiAsync(string root, CancellationToken token)
+    {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("This fixture exercises the Windows desktop UI.");
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                AppBuilder.Configure<Application>().UsePlatformDetect().SetupWithoutStarting();
+                var manual = new MainViewModel(new MacSigningSettingsStore(Path.Combine(root, "signing.json")));
+                var window = new MainWindow { DataContext = manual };
+                var agent = (AgentWorkspaceViewModel)window.FindControl<AgentView>("AgentWorkspace")!.DataContext!;
+                var provider = agent.DesktopPackagingOptionsProvider ?? throw new InvalidOperationException("Manual settings provider missing.");
+                manual.SelectedArchitecture = "arm64";
+                manual.PublishAot = false;
+                manual.SigningIdentity = "test signing identity";
+                manual.NotaryKeychainProfile = "test notary profile";
+                Check(provider() == new DesktopPackagingOptions("arm64", false, "test signing identity", "test notary profile"),
+                    "main window passes current manual packaging settings to the agent");
+                manual.PublishAot = true;
+                manual.SelectedArchitecture = "x64";
+                Check(provider().PublishAot && provider().Architecture == "x64", "agent observes later manual setting changes");
+                completion.TrySetResult();
+            }
+            catch (Exception ex) { completion.TrySetException(ex); }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        await completion.Task.WaitAsync(token);
+        thread.Join();
+        Console.WriteLine("Agent packaging UI configuration checks passed.");
+    }
+
     static async Task CheckPackagingUiAsync(CancellationToken ct)
     {
         if (!OperatingSystem.IsWindows())
@@ -467,22 +505,24 @@ finally
         Directory.CreateDirectory(source);
         await File.WriteAllTextAsync(Path.Combine(scripts, "publish-root-config.ps1"), "", token);
         await File.WriteAllTextAsync(Path.Combine(scripts, "publish-openclaw.ps1"), "", token);
-        await File.WriteAllTextAsync(Path.Combine(win, "publish-config.json"), JsonSerializer.Serialize(new { RootDirectory = outputRoot }), token);
+        await File.WriteAllTextAsync(Path.Combine(win, "publish-config.json"), JsonSerializer.Serialize(new { RootDirectory = outputRoot, OssHost = "https://example.test/updates" }), token);
         var resultFile = Path.Combine(source, "executed.json");
         await File.WriteAllTextAsync(Path.Combine(win, "publish-upgrade-package-win-x64.ps1"),
             "param($CurrentVersion,$NextVersion,$SourceDirectory,$RuntimeIdentifier,$PackageType,$PublishAot,$OssHost,$RefreshOpenClaw,$RefreshNodeModules)\n" +
             "if (Test-Path -LiteralPath (Join-Path $SourceDirectory 'diagnostic-failure')) { Write-Output ('x' * 20000); [Console]::Error.WriteLine((Get-Content -Raw -LiteralPath (Join-Path $SourceDirectory 'diagnostic-failure'))); exit 7 }\n" +
-            "@{ current=$CurrentVersion; next=$NextVersion; source=$SourceDirectory; runtime=$RuntimeIdentifier; package=$PackageType; aot=$PublishAot; openclaw=$RefreshOpenClaw; node=$RefreshNodeModules; pathFirst=($env:PATH -split [IO.Path]::PathSeparator)[0] } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $SourceDirectory 'executed.json')\n", token);
+            "@{ current=$CurrentVersion; next=$NextVersion; source=$SourceDirectory; runtime=$RuntimeIdentifier; package=$PackageType; aot=$PublishAot; host=$OssHost; openclaw=$RefreshOpenClaw; node=$RefreshNodeModules; pathFirst=($env:PATH -split [IO.Path]::PathSeparator)[0] } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $SourceDirectory 'executed.json')\n", token);
         var logs = new ConcurrentQueue<string>();
         var profile = new AgentProfile { Name = "Packaging skill", Endpoint = model.Endpoint, Model = "fake-model", KeyEnvironmentVariable = keyName,
             WorkspaceRoot = root, ScriptsDirectory = scripts, Packaging = true };
-        using var workspace = new HarnessWorkspace(new HarnessSettings(profile.Endpoint, profile.Model, keyName, scripts, profile), logs.Enqueue, () => source, () => scripts);
+        var options = new DesktopPackagingOptions("x64", false, "", "");
+        using var workspace = new HarnessWorkspace(new HarnessSettings(profile.Endpoint, profile.Model, keyName, scripts, profile), logs.Enqueue, () => source, () => scripts, () => options);
         await workspace.InitializeAsync(token);
 
         model.EnqueueTool("publish_latest_desktop_packages", new { });
         var approval = (await workspace.SendAsync("发布最新安装包+升级包", cancellationToken: token)).Approvals.Single();
         Check(approval.Details.Contains("当前版本：1.0.0") && approval.Details.Contains("下次版本：1.0.1") &&
-            approval.Details.Contains("OpenClaw：使用缓存") && approval.Details.Contains("node_modules：使用缓存"), "skill uses initial versions and cached artifacts by default");
+            approval.Details.Contains("OpenClaw：使用缓存") && approval.Details.Contains("node_modules：使用缓存") &&
+            approval.Details.Contains("Native AOT：关闭") && approval.Details.Contains("https://example.test/updates/win-x64"), "skill uses shared configuration, initial versions and cached artifacts by default");
         Check(!File.Exists(resultFile), "skill does not execute before approval");
         Check(model.Requests.Last().Contains("publish_latest_desktop_packages"), "built-in skill is exposed to the model");
         model.EnqueueText("done");
@@ -492,10 +532,20 @@ finally
             Check(result.RootElement.GetProperty("current").GetString() == "1.0.0" && result.RootElement.GetProperty("next").GetString() == "1.0.1" &&
                 result.RootElement.GetProperty("runtime").GetString() == "win-x64" && result.RootElement.GetProperty("package").GetString() == "upgrade-installer" &&
                 result.RootElement.GetProperty("source").GetString() == source && result.RootElement.GetProperty("openclaw").GetString() == "false" &&
-                result.RootElement.GetProperty("node").GetString() == "false", "approved skill passes exact versions and default download choices");
+                result.RootElement.GetProperty("node").GetString() == "false" && result.RootElement.GetProperty("aot").GetString() == "false" &&
+                result.RootElement.GetProperty("host").GetString() == "https://example.test/updates/win-x64", "approved skill passes shared settings and default download choices");
             Check(result.RootElement.GetProperty("pathFirst").GetString() == (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator)[0],
                 "agent inherits the same PATH as manual packaging");
         }
+
+        model.EnqueueTool("publish_latest_desktop_packages", new { });
+        approval = (await workspace.SendAsync("发布", cancellationToken: token)).Approvals.Single();
+        var beforeAotChange = await File.ReadAllTextAsync(resultFile, token);
+        options = options with { PublishAot = true };
+        model.EnqueueText("not executed");
+        await workspace.DecideAsync(approval.Id, true, cancellationToken: token);
+        Check(await File.ReadAllTextAsync(resultFile, token) == beforeAotChange && logs.Any(s => s.Contains("changed after approval")),
+            "changing the manual AOT option after approval blocks stale execution");
 
         foreach (var choice in new[] { (Open: true, Node: false), (Open: false, Node: true), (Open: true, Node: true) })
         {
@@ -506,7 +556,7 @@ finally
             model.EnqueueText("done");
             await workspace.DecideAsync(approval.Id, true, cancellationToken: token);
             using var result = JsonDocument.Parse(await File.ReadAllTextAsync(resultFile, token));
-            Check(result.RootElement.GetProperty("openclaw").GetString() == choice.Open.ToString().ToLowerInvariant() &&
+            Check(result.RootElement.GetProperty("aot").GetString() == "true" && result.RootElement.GetProperty("openclaw").GetString() == choice.Open.ToString().ToLowerInvariant() &&
                 result.RootElement.GetProperty("node").GetString() == choice.Node.ToString().ToLowerInvariant(), "explicit independent download choices reach the script");
         }
 
@@ -619,9 +669,26 @@ finally
         var profile = new AgentProfile { Name = "Multi packaging", Endpoint = model.Endpoint, Model = "fake-model", KeyEnvironmentVariable = keyName,
             WorkspaceRoot = root, Packaging = true };
         var logs = new ConcurrentQueue<string>();
-        using var workspace = new HarnessWorkspace(new HarnessSettings(profile.Endpoint, profile.Model, keyName, "", profile), logs.Enqueue, () => source, () => scripts);
+        var options = new DesktopPackagingOptions("arm64", false, "", "");
+        using var workspace = new HarnessWorkspace(new HarnessSettings(profile.Endpoint, profile.Model, keyName, "", profile), logs.Enqueue, () => source, () => scripts, () => options);
         await workspace.InitializeAsync(token);
         var runs = Path.Combine(source, "runs.txt");
+
+        model.EnqueueTool("publish_latest_desktop_packages", new { });
+        var manualDefault = (await workspace.SendAsync("发布默认架构", cancellationToken: token)).Approvals.Single();
+        Check(manualDefault.Details.Contains("linux-arm64") && manualDefault.Details.Contains("Native AOT：关闭"),
+            "unspecified architecture and AOT use manual packaging selections");
+        options = options with { Architecture = "x64" };
+        model.EnqueueText("not executed");
+        await workspace.DecideAsync(manualDefault.Id, true, cancellationToken: token);
+        Check(!File.Exists(runs) && logs.Any(s => s.Contains("changed after approval")), "changed default architecture requires a new approval");
+
+        model.EnqueueTool("publish_latest_desktop_packages", new { architecture = "arm64" });
+        var configApproval = (await workspace.SendAsync("发布 arm64", cancellationToken: token)).Approvals.Single();
+        await File.WriteAllTextAsync(Path.Combine(win, "publish-config.json"), JsonSerializer.Serialize(new { LinuxRootDirectory = outputRoot, Extra = "changed" }), token);
+        model.EnqueueText("not executed");
+        await workspace.DecideAsync(configApproval.Id, true, cancellationToken: token);
+        Check(!File.Exists(runs) && logs.Any(s => s.Contains("changed after approval")), "shared configuration changes invalidate Linux approval");
 
         model.EnqueueTool("publish_latest_desktop_packages", new { architecture = "arm,arm64,x64,x64", nextVersion = "" });
         var defaults = (await workspace.SendAsync("发布两个架构", cancellationToken: token)).Approvals;

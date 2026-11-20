@@ -1,4 +1,5 @@
 ﻿using Avalonia.Controls;
+using Avalonia.Threading;
 using ClientPublishAgent.ViewModels;
 
 namespace ClientPublishAgent.Views;
@@ -10,6 +11,9 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        if (AgentWorkspace.DataContext is AgentWorkspaceViewModel agentWorkspace)
+            agentWorkspace.DesktopPackagingOptionsProvider = () => Dispatcher.UIThread.Invoke(() =>
+                (DataContext as MainViewModel ?? throw new System.InvalidOperationException("手工打包配置不可用。")).GetDesktopPackagingOptions());
         Opened += async (_, _) =>
         {
             if (AgentWorkspace.DataContext is AgentWorkspaceViewModel agent)

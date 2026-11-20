@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 namespace ClientPublishAgent.Services;
 
 public enum NativeHost { Windows, Linux, MacOS }
+public sealed record DesktopPackagingOptions(string Architecture, bool PublishAot, string SigningIdentity, string NotaryKeychainProfile);
 public sealed record PluginRequest(string Task, string ScriptsRoot, string RuntimeIdentifier, string CurrentVersion, string NextVersion, string OssHost, string SourceDirectory = "", string PackageType = "upgrade-installer", bool PublishAot = true, string? SigningIdentity = null, string? NotaryKeychainProfile = null, bool? RefreshOpenClaw = null, bool? RefreshNodeModules = null);
 public sealed record PluginCommand(string Executable, IReadOnlyList<string> Arguments, string Directory, string OutputRoot,
     string? ScriptPath = null, string? SourceDirectory = null);

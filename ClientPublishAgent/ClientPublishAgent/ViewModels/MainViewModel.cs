@@ -86,6 +86,7 @@ public partial class MainViewModel : ViewModelBase
     public string MarketServerScriptsDirectory => Path.Combine(AppContext.BaseDirectory, "Scripts", "MarketServer");
     public string SourceDirectory => PackagingPathProvider.SourceDirectory;
     public bool IsMacOSSelected => SelectedSystem == "macOS";
+    public DesktopPackagingOptions GetDesktopPackagingOptions() => new(SelectedArchitecture, PublishAot, SigningIdentity.Trim(), NotaryKeychainProfile.Trim());
     public MainViewModel() : this(new MacSigningSettingsStore()) { }
 
     public MainViewModel(MacSigningSettingsStore signingSettings)
