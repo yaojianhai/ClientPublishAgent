@@ -13,6 +13,8 @@
 	[string]$BundleIdentifier = "com.gildata.warrenqf1",
 	[bool]$DownloadOpenClaw = $true,
 	[bool]$DownloadNodeModules = $true,
+	[ValidateSet("", "true", "false")][string]$RefreshOpenClaw = "",
+	[ValidateSet("", "true", "false")][string]$RefreshNodeModules = "",
 	[ValidateSet("true", "false")]
 	[string]$PublishAot = "true"
 )
@@ -27,6 +29,8 @@ $NextVersion = Read-LinuxSemanticVersion -Prompt "请输入下一版本号" -Val
 $publishScript = Join-Path $PSScriptRoot "publish-linux.ps1"
 $upgradeScript = Join-Path $PSScriptRoot "linux-upgrade&package.ps1"
 $publishParameters = @{ DownloadOpenClaw = $DownloadOpenClaw; DownloadNodeModules = $DownloadNodeModules; PublishAot = $publishAotEnabled }
+if ($RefreshOpenClaw -ne "") { $publishParameters.RefreshOpenClaw = $RefreshOpenClaw }
+if ($RefreshNodeModules -ne "") { $publishParameters.RefreshNodeModules = $RefreshNodeModules }
 $upgradeParameters = @{ CurrentVersion = $CurrentVersion; NextVersion = $NextVersion }
 $scriptsDirectory = Split-Path -Parent $PSScriptRoot
 $repoRoot = if ([string]::IsNullOrWhiteSpace($SourceDirectory)) { Split-Path -Parent $scriptsDirectory } else { Split-Path -Parent ([System.IO.Path]::GetFullPath($SourceDirectory)) }

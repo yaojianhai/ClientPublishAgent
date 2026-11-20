@@ -7,7 +7,9 @@
 	[ValidateSet("upgrade", "installer", "upgrade-installer")]
 	[string]$PackageType = "upgrade-installer",
 	[ValidateSet("true", "false")]
-	[string]$PublishAot = "true"
+	[string]$PublishAot = "true",
+	[ValidateSet("", "true", "false")][string]$RefreshOpenClaw = "",
+	[ValidateSet("", "true", "false")][string]$RefreshNodeModules = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,7 +23,10 @@ $upgradeScript = Join-Path $PSScriptRoot "upgrade-win-x64.ps1"
 $installerScript = Join-Path $PSScriptRoot "WQ_打包.bat"
 $stagingDirectory = Join-Path (Get-WindowsPublishRootDirectory) "StagingRelease"
 
-& $publishScript -PublishAot $publishAotEnabled
+$publishParameters = @{ PublishAot = $publishAotEnabled }
+if ($RefreshOpenClaw -ne "") { $publishParameters.RefreshOpenClaw = $RefreshOpenClaw }
+if ($RefreshNodeModules -ne "") { $publishParameters.RefreshNodeModules = $RefreshNodeModules }
+& $publishScript @publishParameters
 if ($PackageType -in "upgrade", "upgrade-installer") {
 	$upgradeParameters = @{ CurrentVersion = $CurrentVersion; NextVersion = $NextVersion; RootDirectory = (Get-WindowsPublishRootDirectory); BackupStagingRelease = $false }
 	if (-not [string]::IsNullOrWhiteSpace($OssHost)) { $upgradeParameters.OssHost = $OssHost }

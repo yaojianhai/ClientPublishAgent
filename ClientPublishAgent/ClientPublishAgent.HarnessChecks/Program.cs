@@ -466,11 +466,12 @@ finally
         Directory.CreateDirectory(win);
         Directory.CreateDirectory(source);
         await File.WriteAllTextAsync(Path.Combine(scripts, "publish-root-config.ps1"), "", token);
+        await File.WriteAllTextAsync(Path.Combine(scripts, "publish-openclaw.ps1"), "", token);
         await File.WriteAllTextAsync(Path.Combine(win, "publish-config.json"), JsonSerializer.Serialize(new { RootDirectory = outputRoot }), token);
         var resultFile = Path.Combine(source, "executed.json");
         await File.WriteAllTextAsync(Path.Combine(win, "publish-upgrade-package-win-x64.ps1"),
-            "param($CurrentVersion,$NextVersion,$SourceDirectory,$RuntimeIdentifier,$PackageType,$PublishAot,$OssHost)\n" +
-            "@{ current=$CurrentVersion; next=$NextVersion; source=$SourceDirectory; runtime=$RuntimeIdentifier; package=$PackageType; aot=$PublishAot } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $SourceDirectory 'executed.json')\n", token);
+            "param($CurrentVersion,$NextVersion,$SourceDirectory,$RuntimeIdentifier,$PackageType,$PublishAot,$OssHost,$RefreshOpenClaw,$RefreshNodeModules)\n" +
+            "@{ current=$CurrentVersion; next=$NextVersion; source=$SourceDirectory; runtime=$RuntimeIdentifier; package=$PackageType; aot=$PublishAot; openclaw=$RefreshOpenClaw; node=$RefreshNodeModules } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $SourceDirectory 'executed.json')\n", token);
         var logs = new ConcurrentQueue<string>();
         var profile = new AgentProfile { Name = "Packaging skill", Endpoint = model.Endpoint, Model = "fake-model", KeyEnvironmentVariable = keyName,
             WorkspaceRoot = root, ScriptsDirectory = scripts, Packaging = true };
@@ -479,7 +480,8 @@ finally
 
         model.EnqueueTool("publish_latest_desktop_packages", new { });
         var approval = (await workspace.SendAsync("发布最新安装包+升级包", cancellationToken: token)).Approvals.Single();
-        Check(approval.Details.Contains("当前版本：1.0.0") && approval.Details.Contains("下次版本：1.0.1"), "skill uses initial versions without patch history");
+        Check(approval.Details.Contains("当前版本：1.0.0") && approval.Details.Contains("下次版本：1.0.1") &&
+            approval.Details.Contains("OpenClaw：使用缓存") && approval.Details.Contains("node_modules：使用缓存"), "skill uses initial versions and cached artifacts by default");
         Check(!File.Exists(resultFile), "skill does not execute before approval");
         Check(model.Requests.Last().Contains("publish_latest_desktop_packages"), "built-in skill is exposed to the model");
         model.EnqueueText("done");
@@ -488,8 +490,31 @@ finally
         {
             Check(result.RootElement.GetProperty("current").GetString() == "1.0.0" && result.RootElement.GetProperty("next").GetString() == "1.0.1" &&
                 result.RootElement.GetProperty("runtime").GetString() == "win-x64" && result.RootElement.GetProperty("package").GetString() == "upgrade-installer" &&
-                result.RootElement.GetProperty("source").GetString() == source, "approved skill passes exact versions, source, native runtime and both package types");
+                result.RootElement.GetProperty("source").GetString() == source && result.RootElement.GetProperty("openclaw").GetString() == "false" &&
+                result.RootElement.GetProperty("node").GetString() == "false", "approved skill passes exact versions and default download choices");
         }
+
+        foreach (var choice in new[] { (Open: true, Node: false), (Open: false, Node: true), (Open: true, Node: true) })
+        {
+            model.EnqueueTool("publish_latest_desktop_packages", new { downloadOpenClaw = choice.Open, downloadNodeModules = choice.Node });
+            approval = (await workspace.SendAsync("发布并按要求下载制品", cancellationToken: token)).Approvals.Single();
+            Check(approval.Details.Contains("OpenClaw：" + (choice.Open ? "重新下载" : "使用缓存")) &&
+                approval.Details.Contains("node_modules：" + (choice.Node ? "重新下载" : "使用缓存")), "approval displays independent download choices");
+            model.EnqueueText("done");
+            await workspace.DecideAsync(approval.Id, true, cancellationToken: token);
+            using var result = JsonDocument.Parse(await File.ReadAllTextAsync(resultFile, token));
+            Check(result.RootElement.GetProperty("openclaw").GetString() == choice.Open.ToString().ToLowerInvariant() &&
+                result.RootElement.GetProperty("node").GetString() == choice.Node.ToString().ToLowerInvariant(), "explicit independent download choices reach the script");
+        }
+
+        model.EnqueueTool("publish_latest_desktop_packages", new { });
+        approval = (await workspace.SendAsync("发布", cancellationToken: token)).Approvals.Single();
+        var beforePolicyChange = await File.ReadAllTextAsync(resultFile, token);
+        await File.WriteAllTextAsync(Path.Combine(scripts, "publish-openclaw.ps1"), "changed", token);
+        model.EnqueueText("not executed");
+        await workspace.DecideAsync(approval.Id, true, cancellationToken: token);
+        Check(await File.ReadAllTextAsync(resultFile, token) == beforePolicyChange && logs.Any(s => s.Contains("changed after approval")),
+            "changed download policy invalidates approval");
 
         var patchDirectory = Path.Combine(outputRoot, "OutputPatchPackage");
         Directory.CreateDirectory(patchDirectory);
@@ -547,10 +572,11 @@ finally
         Directory.CreateDirectory(win);
         Directory.CreateDirectory(source);
         await File.WriteAllTextAsync(Path.Combine(scripts, "publish-root-config.ps1"), "", token);
+        await File.WriteAllTextAsync(Path.Combine(scripts, "publish-openclaw.ps1"), "", token);
         await File.WriteAllTextAsync(Path.Combine(win, "publish-config.json"), JsonSerializer.Serialize(new { LinuxRootDirectory = outputRoot }), token);
         await File.WriteAllTextAsync(Path.Combine(linux, "linux-publish&upgrade&package.ps1"),
-            "param($CurrentVersion,$NextVersion,$SourceDirectory,$RuntimeIdentifier,$PackageType,$PublishAot,$OssHost,$RootDirectory)\n" +
-            "Add-Content -LiteralPath (Join-Path $SourceDirectory 'runs.txt') -Value \"$RuntimeIdentifier|$CurrentVersion|$NextVersion|$PackageType\"\n" +
+            "param($CurrentVersion,$NextVersion,$SourceDirectory,$RuntimeIdentifier,$PackageType,$PublishAot,$OssHost,$RootDirectory,$RefreshOpenClaw,$RefreshNodeModules)\n" +
+            "Add-Content -LiteralPath (Join-Path $SourceDirectory 'runs.txt') -Value \"$RuntimeIdentifier|$CurrentVersion|$NextVersion|$PackageType|$RefreshOpenClaw|$RefreshNodeModules\"\n" +
             "if (Test-Path -LiteralPath (Join-Path $SourceDirectory ('fail-' + $RuntimeIdentifier))) { exit 7 }\n" +
             "$patch = Join-Path $RootDirectory 'OutputPatchPackage'; New-Item -ItemType Directory -Force -Path $patch | Out-Null\n" +
             "Set-Content -LiteralPath (Join-Path $patch ('patch_v' + $CurrentVersion + '_to_v' + $NextVersion + '.zip')) -Value ''\n" +
@@ -578,16 +604,16 @@ finally
         await workspace.DecideAsync(defaults[1].Id, true, cancellationToken: token);
         Check(!File.Exists(runs), "denied default-version batch does not run");
 
-        model.EnqueueTool("publish_latest_desktop_packages", new { architecture = "arm,x64", nextVersion = "1.0.3" });
+        model.EnqueueTool("publish_latest_desktop_packages", new { architecture = "arm,x64", nextVersion = "1.0.3", downloadNodeModules = true });
         var approvals = (await workspace.SendAsync("发布arm,x64 升级包+安装包 下个版本号是 1.0.3", cancellationToken: token)).Approvals;
         Check(approvals.Count == 2 && approvals[0].Details.Contains("linux-arm64") && approvals[0].Details.Contains("当前版本：1.0.2") &&
             approvals[1].Details.Contains("linux-x64") && approvals[1].Details.Contains("当前版本：1.0.1") &&
-            approvals.All(a => a.Details.Contains("下次版本：1.0.3")), "batch has a separate approval and history for each architecture");
+            approvals.All(a => a.Details.Contains("下次版本：1.0.3") && a.Details.Contains("OpenClaw：使用缓存") && a.Details.Contains("node_modules：重新下载")), "batch has a separate approval, history and download choices for each architecture");
         var remaining = await workspace.DecideAsync(approvals[0].Id, true, cancellationToken: token);
         Check(remaining.Approvals.Count == 1 && !File.Exists(runs), "first approval alone does not start either architecture");
         model.EnqueueText("done");
         await workspace.DecideAsync(approvals[1].Id, true, cancellationToken: token);
-        Check((await File.ReadAllLinesAsync(runs, token)).SequenceEqual(["linux-arm64|1.0.2|1.0.3|upgrade-installer", "linux-x64|1.0.1|1.0.3|upgrade-installer"]),
+        Check((await File.ReadAllLinesAsync(runs, token)).SequenceEqual(["linux-arm64|1.0.2|1.0.3|upgrade-installer|false|true", "linux-x64|1.0.1|1.0.3|upgrade-installer|false|true"]),
             "approved architectures run once in order with their own versions");
 
         model.EnqueueTool("publish_latest_desktop_packages", new { architecture = "arm64,x64", nextVersion = "1.0.4" });

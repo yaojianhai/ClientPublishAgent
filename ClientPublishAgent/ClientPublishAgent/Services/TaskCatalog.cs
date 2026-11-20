@@ -7,7 +7,7 @@ using System.Text.RegularExpressions;
 namespace ClientPublishAgent.Services;
 
 public enum NativeHost { Windows, Linux, MacOS }
-public sealed record PluginRequest(string Task, string ScriptsRoot, string RuntimeIdentifier, string CurrentVersion, string NextVersion, string OssHost, string SourceDirectory = "", string PackageType = "upgrade-installer", bool PublishAot = true, string? SigningIdentity = null, string? NotaryKeychainProfile = null);
+public sealed record PluginRequest(string Task, string ScriptsRoot, string RuntimeIdentifier, string CurrentVersion, string NextVersion, string OssHost, string SourceDirectory = "", string PackageType = "upgrade-installer", bool PublishAot = true, string? SigningIdentity = null, string? NotaryKeychainProfile = null, bool? RefreshOpenClaw = null, bool? RefreshNodeModules = null);
 public sealed record PluginCommand(string Executable, IReadOnlyList<string> Arguments, string Directory, string OutputRoot,
     string? ScriptPath = null, string? SourceDirectory = null);
 public interface ITaskPlugin
@@ -113,6 +113,13 @@ public static class TaskCatalog
             args.AddRange(["-RuntimeIdentifier", request.RuntimeIdentifier, "-PackageType", packageType]);
             if (id is "windows-package" or "linux-package" or "macos-package")
                 args.AddRange(["-PublishAot", request.PublishAot.ToString().ToLowerInvariant()]);
+            if (request.RefreshOpenClaw.HasValue != request.RefreshNodeModules.HasValue)
+                throw new ArgumentException("Both artifact download choices must be specified together.");
+            if (request.RefreshOpenClaw.HasValue)
+            {
+                args.AddRange(["-RefreshOpenClaw", request.RefreshOpenClaw.Value.ToString().ToLowerInvariant(),
+                    "-RefreshNodeModules", request.RefreshNodeModules!.Value.ToString().ToLowerInvariant()]);
+            }
             if (id == "macos-package" && request.SigningIdentity is not null)
                 args.AddRange(["-SigningIdentity", request.SigningIdentity.Trim()]);
             if (id == "macos-package" && request.NotaryKeychainProfile is not null)

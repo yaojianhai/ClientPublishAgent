@@ -1,7 +1,9 @@
 ﻿param(
 	[string]$SourceDirectory = $env:CLIENT_PUBLISH_SOURCE_DIRECTORY,
 	[ValidateSet("true", "false")]
-	[string]$PublishAot = "true"
+	[string]$PublishAot = "true",
+	[ValidateSet("", "true", "false")][string]$RefreshOpenClaw = "",
+	[ValidateSet("", "true", "false")][string]$RefreshNodeModules = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -56,6 +58,9 @@ function Copy-NodeRuntime {
 	Get-ChildItem -LiteralPath $nodeSourceDirectory -Force | Copy-Item -Destination $nodeOutputDirectory -Recurse -Force
 }
 
+$artifactOptions = @{}
+if ($RefreshOpenClaw -ne "") { $artifactOptions.RefreshOpenClaw = $RefreshOpenClaw -eq "true" }
+if ($RefreshNodeModules -ne "") { $artifactOptions.RefreshNodeModules = $RefreshNodeModules -eq "true" }
 if (Test-Path -LiteralPath $publishDirectory) {
 	if (-not (Test-Path -LiteralPath $publishDirectory -PathType Container)) { throw "暂存发布路径不是目录：$publishDirectory" }
 	Remove-Item -LiteralPath $publishDirectory -Recurse -Force
@@ -63,7 +68,7 @@ if (Test-Path -LiteralPath $publishDirectory) {
 New-Item -ItemType Directory -Path $publishDirectory -Force | Out-Null
 Copy-OfficeDependency -RepositoryDirectory $repoRoot -PublishDirectory $publishDirectory
 Publish-Project -ProjectPath $desktopProject -OutputDirectory $publishDirectory
-Install-OpenClawRuntime -PublishDirectory $publishDirectory -AiServiceDirectory $aiServiceDirectory -RuntimeIdentifier $runtimeIdentifier
+Install-OpenClawRuntime -PublishDirectory $publishDirectory -AiServiceDirectory $aiServiceDirectory -RuntimeIdentifier $runtimeIdentifier @artifactOptions
 Copy-NodeRuntime
 New-Item -ItemType Directory -Path $updaterDirectory -Force | Out-Null
 Publish-Project -ProjectPath $updaterProject -OutputDirectory $updaterDirectory

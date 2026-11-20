@@ -171,7 +171,9 @@ function Install-OpenClawRuntime {
 		[Parameter(Mandatory)]
 		[string]$RuntimeIdentifier,
 		[Nullable[bool]]$DownloadOpenClaw = $null,
-		[Nullable[bool]]$DownloadNodeModules = $null
+		[Nullable[bool]]$DownloadNodeModules = $null,
+		[Nullable[bool]]$RefreshOpenClaw = $null,
+		[Nullable[bool]]$RefreshNodeModules = $null
 	)
 
 	$openClawPackageUrl = "https://repo.gildata.com/artifactory/Test_local/ai-data-agent/openclaw/openclaw-release.tgz"
@@ -183,8 +185,15 @@ function Install-OpenClawRuntime {
 	$openClawExtractDirectory = Join-Path $downloadDirectory "openclaw-release"
 
 	New-Item -ItemType Directory -Path $artifactDirectory -Force | Out-Null
-	$downloadOpenClawPackage = Should-Download-OpenClawArtifact -ArchivePath $openClawArchivePath -Redownload $DownloadOpenClaw
-	$downloadNodeModulesPackage = Should-Download-OpenClawArtifact -ArchivePath $nodeModulesArchivePath -Redownload $DownloadNodeModules
+	$useExplicitRefresh = $null -ne $RefreshOpenClaw -or $null -ne $RefreshNodeModules
+	if ($useExplicitRefresh) {
+		if ($null -eq $RefreshOpenClaw -or $null -eq $RefreshNodeModules) { throw "必须同时指定 OpenClaw 和 node_modules 的下载选项。" }
+		$downloadOpenClawPackage = Should-Download-OpenClawArtifact -ArchivePath $openClawArchivePath -Redownload $RefreshOpenClaw
+		$downloadNodeModulesPackage = Should-Download-OpenClawArtifact -ArchivePath $nodeModulesArchivePath -Redownload $RefreshNodeModules
+	} else {
+		$downloadOpenClawPackage = Should-Download-OpenClawArtifact -ArchivePath $openClawArchivePath -Redownload $DownloadOpenClaw
+		$downloadNodeModulesPackage = Should-Download-OpenClawArtifact -ArchivePath $nodeModulesArchivePath -Redownload $DownloadNodeModules
+	}
 	if ($downloadOpenClawPackage -or $downloadNodeModulesPackage) {
 		$apiToken = Get-OpenClawApiToken
 		$curlNames = if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) { "curl.exe", "curl" } else { "curl" }
@@ -196,7 +205,7 @@ function Install-OpenClawRuntime {
 			Download-OpenClawArtifact -Url $nodeModulesPackageUrl -DestinationPath $nodeModulesArchivePath -ApiToken $apiToken -CurlExecutable $curlExecutable
 		}
 	}
-	if ($null -ne $DownloadOpenClaw -and -not [bool]$DownloadOpenClaw) {
+	if (-not $useExplicitRefresh -and $null -ne $DownloadOpenClaw -and -not [bool]$DownloadOpenClaw) {
 		Write-Host "未选择下载 OpenClaw 运行包，跳过解压和 dist 压缩。"
 		return
 	}

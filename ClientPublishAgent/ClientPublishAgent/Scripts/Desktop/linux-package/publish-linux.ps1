@@ -5,6 +5,8 @@
 	[string]$SourceDirectory = $env:CLIENT_PUBLISH_SOURCE_DIRECTORY,
 	[bool]$DownloadOpenClaw = $true,
 	[bool]$DownloadNodeModules = $true,
+	[ValidateSet("", "true", "false")][string]$RefreshOpenClaw = "",
+	[ValidateSet("", "true", "false")][string]$RefreshNodeModules = "",
 	[ValidateSet("true", "false")]
 	[string]$PublishAot = "true"
 )
@@ -80,6 +82,9 @@ function Copy-NodeRuntime {
 	Set-LinuxExecutablePermission -Path (Join-Path $nodeOutputDirectory "node")
 }
 
+$artifactOptions = @{}
+if ($RefreshOpenClaw -ne "") { $artifactOptions.RefreshOpenClaw = $RefreshOpenClaw -eq "true" }
+if ($RefreshNodeModules -ne "") { $artifactOptions.RefreshNodeModules = $RefreshNodeModules -eq "true" }
 if (Test-Path -LiteralPath $publishDirectory) {
 	if (-not (Test-Path -LiteralPath $publishDirectory -PathType Container)) { throw "暂存发布路径不是目录：$publishDirectory" }
 	Write-Host "清理旧的 Linux 暂存发布目录..."
@@ -90,7 +95,7 @@ Write-Host "开始复制 Office 依赖..."
 Copy-OfficeDependency -RepositoryDirectory $repoRoot -PublishDirectory $publishDirectory
 Write-Host "开始发布桌面主程序..."
 Publish-Project -ProjectPath $desktopProject -OutputDirectory $publishDirectory
-Install-OpenClawRuntime -PublishDirectory $publishDirectory -AiServiceDirectory $aiServiceDirectory -RuntimeIdentifier $RuntimeIdentifier -DownloadOpenClaw $DownloadOpenClaw -DownloadNodeModules $DownloadNodeModules
+Install-OpenClawRuntime -PublishDirectory $publishDirectory -AiServiceDirectory $aiServiceDirectory -RuntimeIdentifier $RuntimeIdentifier -DownloadOpenClaw $DownloadOpenClaw -DownloadNodeModules $DownloadNodeModules @artifactOptions
 Copy-NodeRuntime
 New-Item -ItemType Directory -Path $updaterDirectory -Force | Out-Null
 Publish-Project -ProjectPath $updaterProject -OutputDirectory $updaterDirectory

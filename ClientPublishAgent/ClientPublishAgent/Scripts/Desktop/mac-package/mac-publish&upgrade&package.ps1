@@ -13,7 +13,9 @@
 	[ValidateSet("upgrade", "installer", "upgrade-installer")]
 	[string]$PackageType = "upgrade-installer",
 	[ValidateSet("true", "false")]
-	[string]$PublishAot = "true"
+	[string]$PublishAot = "true",
+	[ValidateSet("", "true", "false")][string]$RefreshOpenClaw = "",
+	[ValidateSet("", "true", "false")][string]$RefreshNodeModules = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,6 +46,8 @@ $repoRoot = if ([string]::IsNullOrWhiteSpace($SourceDirectory)) { Split-Path -Pa
 $rootDirectory = if ([string]::IsNullOrWhiteSpace($runtimeIdentifierForRoot)) { throw "无法解析 macOS 运行时标识，无法确定发布根目录。" } else { Resolve-DesktopPublishRootDirectory -RuntimeIdentifier $runtimeIdentifierForRoot -RepositoryRoot $repoRoot -RootDirectory $RootDirectory }
 $publishParameters = @{ RootDirectory = $rootDirectory }
 $publishParameters.PublishAot = $publishAotEnabled
+if ($RefreshOpenClaw -ne "") { $publishParameters.RefreshOpenClaw = $RefreshOpenClaw }
+if ($RefreshNodeModules -ne "") { $publishParameters.RefreshNodeModules = $RefreshNodeModules }
 if (-not [string]::IsNullOrWhiteSpace($SourceDirectory)) { $publishParameters.SourceDirectory = $SourceDirectory }
 $publishParameters.RootDirectory = $rootDirectory
 $upgradeParameters.RootDirectory = $rootDirectory

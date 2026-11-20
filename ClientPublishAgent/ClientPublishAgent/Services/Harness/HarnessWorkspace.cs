@@ -739,9 +739,11 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
     private Task<string> PublishLatestDesktopAsync(
         [Description("Explicit next version x.y.z, or empty when not specified by the user")] string nextVersion = "",
         [Description("Requested architectures separated by commas: x64, arm64 (arm means arm64); or empty for the current OS architecture")] string architecture = "",
+        [Description("Download OpenClaw only when explicitly requested by the user; otherwise false")] bool downloadOpenClaw = false,
+        [Description("Download node_modules only when explicitly requested by the user; otherwise false")] bool downloadNodeModules = false,
         CancellationToken cancellationToken = default) =>
         ExecuteGenericAsync("publish_latest_desktop_packages", new Dictionary<string, object?>
-        { ["nextVersion"] = nextVersion ?? "", ["architecture"] = architecture ?? "" }, cancellationToken);
+        { ["nextVersion"] = nextVersion ?? "", ["architecture"] = architecture ?? "", ["downloadOpenClaw"] = downloadOpenClaw, ["downloadNodeModules"] = downloadNodeModules }, cancellationToken);
 
     private static string ResolveAgentOssHost(string task, string runtimeIdentifier, string ossHost) =>
         task == "marketserver" ? ossHost : TaskCatalog.GetDesktopOssHost(
@@ -757,6 +759,8 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
         var normalized = arguments is null ? new Dictionary<string, object?>() : new Dictionary<string, object?>(arguments);
         if (!normalized.ContainsKey("nextVersion")) normalized["nextVersion"] = "";
         if (!normalized.ContainsKey("architecture")) normalized["architecture"] = "";
+        if (!normalized.ContainsKey("downloadOpenClaw")) normalized["downloadOpenClaw"] = false;
+        if (!normalized.ContainsKey("downloadNodeModules")) normalized["downloadNodeModules"] = false;
         return CanonicalArguments(normalized);
     }
 
@@ -766,13 +770,16 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
         var root = doc.RootElement;
         var architecture = root.GetProperty("architecture").GetString() ?? throw new ArgumentException("Invalid architecture.");
         var next = root.GetProperty("nextVersion").GetString() ?? throw new ArgumentException("Invalid next version.");
+        var downloadOpenClaw = root.GetProperty("downloadOpenClaw").GetBoolean();
+        var downloadNodeModules = root.GetProperty("downloadNodeModules").GetBoolean();
         if (architecture.Length > 100) throw new ArgumentException("架构参数过长。");
         var trimmed = architecture.Trim().ToLowerInvariant();
         var names = trimmed.Length == 0 ? [""] : Regex.Split(trimmed, @"[,，、;\s]+")
             .Where(name => name.Length > 0).Select(name => name == "arm" ? "arm64" : name).Distinct(StringComparer.Ordinal).ToArray();
         if (names.Length == 0 || names.Any(name => name is not ("" or "x64" or "arm64")) || names.Length > 2)
             throw new ArgumentException("CPU 架构必须为 x64 或 arm64。");
-        return names.Select(name => CanonicalArguments(new Dictionary<string, object?> { ["architecture"] = name, ["nextVersion"] = next })).ToArray();
+        return names.Select(name => CanonicalArguments(new Dictionary<string, object?> { ["architecture"] = name, ["nextVersion"] = next,
+            ["downloadOpenClaw"] = downloadOpenClaw, ["downloadNodeModules"] = downloadNodeModules })).ToArray();
     }
 
     private async Task<(string Arguments, GenericSnapshot Snapshot)[]> LatestSnapshotsAsync(string arguments, CancellationToken ct)
@@ -832,7 +839,8 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
                 throw new InvalidOperationException("macOS 完整分发要求同时填写签名身份和公证配置名称，或两项均留空。");
         }
         var request = new PluginRequest(task, scriptsRoot, runtime, versions.CurrentVersion, next, "",
-            _sourceDirectoryProvider(), "upgrade-installer", true, signingIdentity, notaryProfile);
+            _sourceDirectoryProvider(), "upgrade-installer", true, signingIdentity, notaryProfile,
+            arguments.GetProperty("downloadOpenClaw").GetBoolean(), arguments.GetProperty("downloadNodeModules").GetBoolean());
         TaskCatalog.ValidateRequest(request);
         var target = Version.Parse(request.NextVersion);
         if (target.Minor > 99 || target.Build > 99)
@@ -935,6 +943,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
                 command.OutputRoot,
                 "Task:" + request.Task + "; Runtime:" + request.RuntimeIdentifier + "; Versions:" + request.CurrentVersion + ":" + request.NextVersion,
                 "Signing:" + request.SigningIdentity + "; Notary:" + request.NotaryKeychainProfile,
+                "RefreshOpenClaw:" + request.RefreshOpenClaw + "; RefreshNodeModules:" + request.RefreshNodeModules,
                 "OssHost:" + effectiveOssHost,
                 "SourceDirectory:" + Path.GetFullPath(request.SourceDirectory)
             };
@@ -944,7 +953,11 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
             if (request.Task == "marketserver")
                 paths = [Path.Combine(request.SourceDirectory, "WarrenqF1.MarketServer", "WarrenqF1.MarketServer.csproj")];
             else
+            {
                 paths = paths.Append(Path.Combine(request.ScriptsRoot, "publish-root-config.ps1")).ToArray();
+                if (name == "publish_latest_desktop_packages")
+                    paths = paths.Append(Path.Combine(request.ScriptsRoot, "publish-openclaw.ps1")).ToArray();
+            }
             if (paths.Length > 500) throw new InvalidOperationException("Too many plugin dependencies.");
             foreach (var path in paths)
             {
@@ -952,7 +965,8 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
                 hashes.Add(path + ":" + Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false))));
             }
             return new GenericSnapshot(Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(string.Join("\n", hashes)))),
-                command.Directory, "输出根目录：" + command.OutputRoot + "\n目标平台：" + request.RuntimeIdentifier + "\n当前版本：" + request.CurrentVersion + "\n下次版本：" + request.NextVersion + (effectiveOssHost.Length > 0 ? "\n升级地址：" + effectiveOssHost : "") +
+                command.Directory, "输出根目录：" + command.OutputRoot + "\n目标平台：" + request.RuntimeIdentifier + "\n当前版本：" + request.CurrentVersion + "\n下次版本：" + request.NextVersion +
+                (name == "publish_latest_desktop_packages" ? "\nOpenClaw：" + (request.RefreshOpenClaw == true ? "重新下载" : "使用缓存，缺失时下载") + "\nnode_modules：" + (request.RefreshNodeModules == true ? "重新下载" : "使用缓存，缺失时下载") : "") + (effectiveOssHost.Length > 0 ? "\n升级地址：" + effectiveOssHost : "") +
                 (name == "publish_latest_desktop_packages" && request.Task == "macos-package" ?
                     (string.IsNullOrWhiteSpace(request.SigningIdentity) ? "\nmacOS：未签名测试包。" : "\nmacOS 签名身份：" + request.SigningIdentity + "\n公证配置：" + request.NotaryKeychainProfile) : "") + "\n" + TaskCatalog.Get(request.Task).Description +
                 (request.Task == "marketserver" ? "" : "\n发布前会在源码仓库执行 git pull --ff-only，修改本地检出并访问远端；拉取失败会停止发布。") +
@@ -1128,6 +1142,8 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
                     .Where(p => Path.GetExtension(p) is ".ps1" or ".json"))
                     locks.Add(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read));
                 locks.Add(new FileStream(Path.Combine(request.ScriptsRoot, "publish-root-config.ps1"), FileMode.Open, FileAccess.Read, FileShare.Read));
+                if (name == "publish_latest_desktop_packages")
+                    locks.Add(new FileStream(Path.Combine(request.ScriptsRoot, "publish-openclaw.ps1"), FileMode.Open, FileAccess.Read, FileShare.Read));
             }
             if (request.Task == "marketserver")
                 locks.Add(new FileStream(Path.Combine(request.SourceDirectory, "WarrenqF1.MarketServer", "WarrenqF1.MarketServer.csproj"), FileMode.Open, FileAccess.Read, FileShare.Read));
@@ -1226,6 +1242,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
 }
 
 [System.Text.Json.Serialization.JsonSerializable(typeof(object))]
+[System.Text.Json.Serialization.JsonSerializable(typeof(bool))]
 [System.Text.Json.Serialization.JsonSerializable(typeof(Dictionary<string, object?>))]
 [System.Text.Json.Serialization.JsonSerializable(typeof(JsonElement))]
 internal partial class HarnessJsonContext : System.Text.Json.Serialization.JsonSerializerContext
