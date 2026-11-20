@@ -22,6 +22,8 @@ public sealed class PowerShellTaskRunner
 
 	/// <summary>Reports whether the currently running process accepts local standard input.</summary>
 	public event Action<bool>? InputAvailabilityChanged;
+	/// <summary>Reports that an interactive PowerShell Read-Host is waiting for input.</summary>
+	public event Action? InputRequested;
 
 	public async Task<int> RunAsync(string scriptPath, string currentVersion, string nextVersion,
 		string ossHost, IProgress<string> output, CancellationToken cancellationToken,
@@ -98,25 +100,29 @@ public sealed class PowerShellTaskRunner
 		IReadOnlyDictionary<string, string?>? environment = null, IProgress<string>? errorOutput = null)
 	{
 		var processArguments = arguments.ToArray();
+		string? inputMarker = null;
 		if (interactive && (Path.GetFileNameWithoutExtension(executable).Equals("powershell", StringComparison.OrdinalIgnoreCase) ||
 			Path.GetFileNameWithoutExtension(executable).Equals("pwsh", StringComparison.OrdinalIgnoreCase)))
-			processArguments = PrepareInteractivePowerShellArguments(processArguments);
+		{
+			inputMarker = "__CPA_INPUT_" + Guid.NewGuid().ToString("N") + "__";
+			processArguments = PrepareInteractivePowerShellArguments(processArguments, inputMarker);
+		}
 		await ExecutionGate.WaitAsync(cancellationToken);
-		try { return await RunCoreAsync(executable, processArguments, directory, output, cancellationToken, interactive, environment, errorOutput); }
+		try { return await RunCoreAsync(executable, processArguments, directory, output, cancellationToken, interactive, environment, errorOutput, inputMarker); }
 		finally { ExecutionGate.Release(); }
 	}
 
-	private static string[] PrepareInteractivePowerShellArguments(string[] arguments)
+	private static string[] PrepareInteractivePowerShellArguments(string[] arguments, string inputMarker)
 	{
 		var fileIndex = Array.FindIndex(arguments, a => a.Equals("-File", StringComparison.OrdinalIgnoreCase));
 		var commandIndex = Array.FindIndex(arguments, a => a.Equals("-Command", StringComparison.OrdinalIgnoreCase));
 		var index = fileIndex >= 0 ? fileIndex : commandIndex;
 		if (index < 0 || index + 1 >= arguments.Length) throw new ArgumentException("Interactive PowerShell requires a script or command.", nameof(arguments));
 		// Windows PowerShell can hide Read-Host prompts when its input is redirected.
-		const string readHost = "$utf8 = New-Object System.Text.UTF8Encoding($false); [Console]::InputEncoding = $utf8; [Console]::OutputEncoding = $utf8; " +
+		var readHost = "$utf8 = New-Object System.Text.UTF8Encoding($false); [Console]::InputEncoding = $utf8; [Console]::OutputEncoding = $utf8; " +
 			"function global:Read-Host { [CmdletBinding()] param([Parameter(Position=0)][object]$Prompt, [switch]$AsSecureString, [switch]$MaskInput) " +
 			"if ($AsSecureString -or $MaskInput) { throw 'Secure input is not supported in redirected tasks.' }; " +
-			"if ($null -ne $Prompt) { [Console]::Out.Write(([string]$Prompt) + ': ') }; [Console]::Out.Flush(); " +
+			"if ($null -ne $Prompt) { [Console]::Out.Write(([string]$Prompt) + ': ') }; [Console]::Out.Write('" + inputMarker + "'); [Console]::Out.Flush(); " +
 			"$line = [Console]::In.ReadLine(); if ($null -eq $line) { throw 'Task input was closed.' }; $line }; ";
 		string command;
 		if (fileIndex >= 0)
@@ -142,7 +148,7 @@ public sealed class PowerShellTaskRunner
 
 	private async Task<int> RunCoreAsync(string executable, IEnumerable<string> arguments, string directory,
 		IProgress<string> output, CancellationToken cancellationToken, bool interactive,
-		IReadOnlyDictionary<string, string?>? environment, IProgress<string>? errorOutput)
+		IReadOnlyDictionary<string, string?>? environment, IProgress<string>? errorOutput, string? inputMarker)
 	{
 		cancellationToken.ThrowIfCancellationRequested();
 		var startInfo = new ProcessStartInfo
@@ -172,12 +178,6 @@ public sealed class PowerShellTaskRunner
 		}
 		using var process = new Process { StartInfo = startInfo };
 		process.Start();
-		var stdout = ReadOutputAsync(process.StandardOutput, output);
-		var isPowerShell = Path.GetFileNameWithoutExtension(executable).Equals("powershell", StringComparison.OrdinalIgnoreCase) ||
-			Path.GetFileNameWithoutExtension(executable).Equals("pwsh", StringComparison.OrdinalIgnoreCase);
-		var stderr = interactive && isPowerShell
-			? ReadPowerShellErrorAsync(process.StandardError, errorOutput ?? output)
-			: ReadOutputAsync(process.StandardError, errorOutput ?? output);
 		try
 		{
 			if (interactive)
@@ -186,6 +186,13 @@ public sealed class PowerShellTaskRunner
 				InputAvailabilityChanged?.Invoke(true);
 			}
 			else process.StandardInput.Close();
+			var stdout = inputMarker is null ? ReadOutputAsync(process.StandardOutput, output) :
+				ReadInteractiveOutputAsync(process.StandardOutput, output, inputMarker);
+			var isPowerShell = Path.GetFileNameWithoutExtension(executable).Equals("powershell", StringComparison.OrdinalIgnoreCase) ||
+				Path.GetFileNameWithoutExtension(executable).Equals("pwsh", StringComparison.OrdinalIgnoreCase);
+			var stderr = interactive && isPowerShell
+				? ReadPowerShellErrorAsync(process.StandardError, errorOutput ?? output)
+				: ReadOutputAsync(process.StandardError, errorOutput ?? output);
 			try
 			{
 				await process.WaitForExitAsync(cancellationToken);
@@ -238,6 +245,29 @@ public sealed class PowerShellTaskRunner
 		int count;
 		while ((count = await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false)) > 0)
 			output.Report(new string(buffer, 0, count));
+	}
+
+	private async Task ReadInteractiveOutputAsync(StreamReader reader, IProgress<string> output, string marker)
+	{
+		var buffer = new char[1024];
+		var pending = "";
+		int count;
+		while ((count = await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false)) > 0)
+		{
+			pending += new string(buffer, 0, count);
+			int index;
+			while ((index = pending.IndexOf(marker, StringComparison.Ordinal)) >= 0)
+			{
+				if (index > 0) output.Report(pending[..index]);
+				pending = pending[(index + marker.Length)..];
+				InputRequested?.Invoke();
+			}
+			var keep = Math.Min(marker.Length - 1, pending.Length);
+			while (keep > 0 && !marker.AsSpan(0, keep).SequenceEqual(pending.AsSpan(pending.Length - keep))) keep--;
+			if (pending.Length > keep) output.Report(pending[..(pending.Length - keep)]);
+			pending = keep == 0 ? "" : pending[^keep..];
+		}
+		if (pending.Length > 0) output.Report(pending);
 	}
 
 	private static async Task ReadPowerShellErrorAsync(StreamReader reader, IProgress<string> output)

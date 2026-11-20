@@ -94,6 +94,17 @@ try
         model.AssertHealthy();
         return;
     }
+    if (args.Contains("--script-input-ui", StringComparer.Ordinal))
+    {
+        await CheckScriptInputUiAsync(model, root, keyName, ct);
+        model.AssertHealthy();
+        return;
+    }
+    if (args.Contains("--script-input-runner", StringComparer.Ordinal))
+    {
+        await CheckScriptInputRunnerAsync(root, ct);
+        return;
+    }
     if (args.Contains("--chat-ui", StringComparer.Ordinal))
     {
         await CheckChatInteractionAsync(model, root, keyName, ct);
@@ -645,6 +656,34 @@ finally
         await workspace.SendAsync("排查刚才失败的原因", cancellationToken: token);
         Check(model.Requests.Last().Contains("The artifact download received HTTP 403") && !model.Requests.Last().Contains("PRIVATE_DIAGNOSTIC_SECRET"),
             "subsequent diagnosis retains the 403 classification without raw output");
+        await File.WriteAllTextAsync(Path.Combine(source, "diagnostic-failure"),
+            "Error: HTTPClientError.connectTimeout\nApple 公证提交失败（退出代码：1）：macOS DMG PRIVATE_DIAGNOSTIC_SECRET", token);
+        model.EnqueueTool("publish_latest_desktop_packages", new { nextVersion = "1.2.0" });
+        approval = (await workspace.SendAsync("发布", cancellationToken: token)).Approvals.Single();
+        model.EnqueueText("failed");
+        await workspace.DecideAsync(approval.Id, true, cancellationToken: token);
+        Check(model.Requests.Last().Contains("Apple notarization reported a connection timeout") &&
+            model.Requests.Last().Contains("Submission status is unknown") && !model.Requests.Last().Contains("PRIVATE_DIAGNOSTIC_SECRET"),
+            "notarization timeout is classified without exposing raw output or assuming submission status");
+        await workspace.ResetAsync(token);
+        await File.WriteAllTextAsync(Path.Combine(source, "diagnostic-failure"),
+            "Apple 公证提交失败（退出代码：1）：macOS DMG PRIVATE_DIAGNOSTIC_SECRET", token);
+        model.EnqueueTool("publish_latest_desktop_packages", new { nextVersion = "1.2.0" });
+        approval = (await workspace.SendAsync("发布", cancellationToken: token)).Approvals.Single();
+        model.EnqueueText("failed");
+        await workspace.DecideAsync(approval.Id, true, cancellationToken: token);
+        Check(model.Requests.Last().Contains("macOS notarization reported an error") &&
+            !model.Requests.Last().Contains("connection timeout") && !model.Requests.Last().Contains("PRIVATE_DIAGNOSTIC_SECRET"),
+            "other notarization failures are not classified as timeouts or disclosed");
+        await workspace.ResetAsync(token);
+        await File.WriteAllTextAsync(Path.Combine(source, "diagnostic-failure"),
+            "Apple 公证连接超时：macOS DMG PRIVATE_DIAGNOSTIC_SECRET", token);
+        model.EnqueueTool("publish_latest_desktop_packages", new { nextVersion = "1.2.0" });
+        approval = (await workspace.SendAsync("发布", cancellationToken: token)).Approvals.Single();
+        model.EnqueueText("failed");
+        await workspace.DecideAsync(approval.Id, true, cancellationToken: token);
+        Check(model.Requests.Last().Contains("Apple notarization reported a connection timeout") &&
+            !model.Requests.Last().Contains("PRIVATE_DIAGNOSTIC_SECRET"), "new timeout message is classified without exposing raw output");
         await File.WriteAllTextAsync(Path.Combine(source, "diagnostic-failure"), "unrecognized PRIVATE_DIAGNOSTIC_SECRET", token);
         model.EnqueueTool("publish_latest_desktop_packages", new { nextVersion = "1.2.0" });
         approval = (await workspace.SendAsync("发布", cancellationToken: token)).Approvals.Single();
@@ -814,8 +853,10 @@ finally
         var token = deadline.Token;
         var runner = new PowerShellTaskRunner();
         var events = new ConcurrentQueue<bool>();
+        var requests = new ConcurrentQueue<bool>();
         var output = new CollectingProgress();
         runner.InputAvailabilityChanged += events.Enqueue;
+        runner.InputRequested += () => requests.Enqueue(true);
         var script = Path.Combine(root, "interactive-check.ps1");
         await File.WriteAllTextAsync(script, "param($CurrentVersion,$NextVersion,$OssHost)\nWrite-Output 'started-interactive-test'\n$v = Read-Host ([string]::Concat([char]0x8BF7,[char]0x8F93,[char]0x5165))\nWrite-Host ('value=' + $v)\nWrite-Host 'before-pause'\ncmd.exe /c pause\nWrite-Host 'interactive-finished'", token);
         using var runCancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -823,6 +864,7 @@ finally
         try
         {
             await WaitForOutputAsync(output, "\u8bf7\u8f93\u5165", token);
+            while (requests.IsEmpty) await Task.Delay(20, token);
             Check(events.TryPeek(out var available) && available, "interactive task exposes local input");
             await runner.SendInputAsync("\u786e\u8ba4", token);
             await WaitForOutputAsync(output, "before-pause", token);
@@ -840,6 +882,7 @@ finally
             try { await run; } catch (OperationCanceledException) { }
         }
         Check(events.Last() == false, "interactive input unavailable after process exit");
+        Check(requests.Count == 1 && !output.Text.Contains("__CPA_INPUT_"), "Read-Host emits one internal input request without exposing its marker");
         try { await runner.SendInputAsync("stale", token); throw new Exception("FAIL: input accepted after exit"); }
         catch (InvalidOperationException) { }
 
@@ -915,6 +958,117 @@ finally
     static async Task WaitForOutputAsync(CollectingProgress output, string text, CancellationToken ct)
     {
         while (!output.Text.Contains(text, StringComparison.OrdinalIgnoreCase)) await Task.Delay(20, ct);
+    }
+
+    static async Task CheckScriptInputRunnerAsync(string root, CancellationToken ct)
+    {
+        var runner = new PowerShellTaskRunner();
+        var output = new CollectingProgress();
+        var events = new ConcurrentQueue<bool>();
+        var promptCount = 0;
+        runner.InputAvailabilityChanged += events.Enqueue;
+        runner.InputRequested += () => Interlocked.Increment(ref promptCount);
+        var script = Path.Combine(root, "two-prompts.ps1");
+        await File.WriteAllTextAsync(script, "param($CurrentVersion,$NextVersion,$OssHost)\nWrite-Output 'started'\n$a = Read-Host 'first'\nWrite-Output ('first=' + $a)\n$b = Read-Host 'second'\nWrite-Output ('second=' + $b)\n", ct);
+        var run = runner.RunAsync(script, "1.0.0", "1.0.1", "", output, ct);
+        while (Volatile.Read(ref promptCount) < 1) await Task.Delay(20, ct);
+        Check(events.TryPeek(out var available) && available && output.Text.Contains("first"), "first prompt is reported while input is available");
+        await runner.SendInputAsync("one", ct);
+        while (Volatile.Read(ref promptCount) < 2) await Task.Delay(20, ct);
+        await runner.SendInputAsync("two", ct);
+        Check(await run == 0 && output.Text.Contains("first=one") && output.Text.Contains("second=two") && promptCount == 2 &&
+            events.Last() == false && !output.Text.Contains("__CPA_INPUT_"), "two Read-Host prompts preserve output and do not leak internal markers");
+        var commandOutput = new CollectingProgress();
+        var before = promptCount;
+        var command = runner.RunProcessAsync(PowerShellTaskRunner.ResolvePowerShell(), ["-NoProfile", "-Command", "$value = Read-Host 'command'; Write-Output ('value=' + $value)"],
+            root, commandOutput, ct, interactive: true);
+        while (Volatile.Read(ref promptCount) == before) await Task.Delay(20, ct);
+        await runner.SendInputAsync("ok", ct);
+        Check(await command == 0 && commandOutput.Text.Contains("value=ok") && !commandOutput.Text.Contains("__CPA_INPUT_"),
+            "interactive terminal commands report Read-Host without leaking internal markers");
+        using (var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct))
+        {
+            before = promptCount;
+            var cancelled = runner.RunProcessAsync(PowerShellTaskRunner.ResolvePowerShell(), ["-NoProfile", "-Command", "$value = Read-Host 'cancel'"],
+                root, new CollectingProgress(), cancellation.Token, interactive: true);
+            while (Volatile.Read(ref promptCount) == before) await Task.Delay(20, ct);
+            cancellation.Cancel();
+            await ExpectCancellationAsync(cancelled, "cancel while waiting for script input");
+            Check(events.Last() == false, "cancelling a prompt disables input");
+            try { await runner.SendInputAsync("stale", ct); throw new Exception("FAIL: cancelled task accepted input"); }
+            catch (InvalidOperationException) { }
+        }
+        Console.WriteLine("Script input runner checks passed.");
+    }
+
+    static async Task CheckScriptInputUiAsync(FakeModel model, string root, string keyName, CancellationToken ct)
+    {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("This fixture exercises the Windows desktop UI.");
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            try
+            {
+                AppBuilder.Configure<Application>().UsePlatformDetect().SetupWithoutStarting();
+                Application.Current!.Styles.Add(new FluentTheme());
+                SynchronizationContext.SetSynchronizationContext(new AvaloniaSynchronizationContext());
+                Dispatcher.UIThread.Post(async () =>
+                {
+                    Window? window = null;
+                    AgentWorkspaceViewModel? ui = null;
+                    try
+                    {
+                        var store = new PlatformStore(Path.Combine(root, "input-ui-cache"));
+                        var profile = new AgentProfile { Name = "Input UI", Endpoint = model.Endpoint, Model = "fake-model", KeyEnvironmentVariable = keyName,
+                            WorkspaceRoot = root, Terminal = true };
+                        store.SaveProfiles([profile]);
+                        ui = new AgentWorkspaceViewModel(store);
+                        var view = new AgentView(ui);
+                        window = new Window { Width = 980, Height = 720, ShowInTaskbar = false, Content = view };
+                        window.Show();
+                        await ui.InitializeOnStartupAsync();
+                        var panel = view.FindControl<Expander>("ScriptInteraction")!;
+                        Check(!panel.IsExpanded && !ui.IsScriptInteractionExpanded, "script interaction defaults to collapsed");
+                        model.EnqueueTool("run_terminal", new { command = "Write-Output 'started'; Start-Sleep -Seconds 2; $first = Read-Host 'first'; Start-Sleep -Seconds 1; $second = Read-Host 'second'; Write-Output 'finished'" });
+                        ui.Input = "run interactive script";
+                        await ui.SendCommand.ExecuteAsync(null);
+                        var approval = ui.ChatItems.Single(item => item.IsPendingApproval);
+                        model.EnqueueText("done");
+                        var running = ui.AllowOnceCommand.ExecuteAsync(approval);
+                        while (!ui.IsScriptInputAvailable) await Task.Delay(20, ct);
+                        Check(!panel.IsExpanded, "running without a prompt does not expand the panel");
+                        panel.IsExpanded = true;
+                        Check(ui.IsScriptInteractionExpanded, "user can manually expand the panel");
+                        panel.IsExpanded = false;
+                        Check(!ui.IsScriptInteractionExpanded, "user can manually collapse the panel");
+                        while (!ui.IsScriptInteractionExpanded) await Task.Delay(20, ct);
+                        Check(panel.IsExpanded && ui.TaskLog.Contains("first"), "Read-Host opens the panel with its prompt");
+                        ui.ScriptInput = "private-local-ui-input-438";
+                        await ui.SendScriptInputCommand.ExecuteAsync(null);
+                        Check(!panel.IsExpanded, "successful input collapses the panel");
+                        while (!ui.IsScriptInteractionExpanded) await Task.Delay(20, ct);
+                        Check(panel.IsExpanded && ui.TaskLog.Contains("second"), "subsequent prompt reopens the panel");
+                        ui.ScriptInput = "";
+                        await ui.SendScriptInputCommand.ExecuteAsync(null);
+                        await running;
+                        Check(!ui.IsScriptInputAvailable && !ui.IsScriptInteractionExpanded && !ui.TaskLog.Contains("__CPA_INPUT_"),
+                            "completion hides the panel and keeps internal markers out of logs");
+                        Check(!model.Requests.Last().Contains("private-local-ui-input-438"), "script input is not automatically sent to the model");
+                        completion.TrySetResult();
+                    }
+                    catch (Exception ex) { completion.TrySetException(ex); }
+                    finally { if (ui is not null) await ui.CloseAsync(); window?.Close(); stop.Cancel(); }
+                });
+                Dispatcher.UIThread.MainLoop(stop.Token);
+            }
+            catch (Exception ex) { completion.TrySetException(ex); }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        await completion.Task.WaitAsync(ct);
+        thread.Join();
+        Console.WriteLine("Script interaction UI checks passed.");
     }
 
     static async Task CheckChatInteractionAsync(FakeModel model, string root, string keyName, CancellationToken ct, bool historyOrderOnly = false)

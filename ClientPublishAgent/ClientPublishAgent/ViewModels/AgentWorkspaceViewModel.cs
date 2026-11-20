@@ -27,6 +27,7 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 	private bool _closing;
 	private bool _restoredUnresolved;
 	private bool _needsInitialTitle;
+	private long _scriptInputRequestVersion;
 	private readonly StringBuilder _transcript = new();
 	private readonly StringBuilder _localLog = new();
 	public Func<DesktopPackagingOptions>? DesktopPackagingOptionsProvider { get; set; }
@@ -280,6 +281,7 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 	[ObservableProperty] public partial string TaskLog { get; set; } = "";
 	[ObservableProperty] public partial string ScriptInput { get; set; } = "";
 	[ObservableProperty] public partial bool IsScriptInputAvailable { get; set; }
+	[ObservableProperty] public partial bool IsScriptInteractionExpanded { get; set; }
 	[ObservableProperty] public partial string Status { get; set; } = "可直接输入问题开始新会话；首条消息将自动作为历史标题。";
 
 	[ObservableProperty]
@@ -378,6 +380,7 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 			_workspace = new HarnessWorkspace(settings, line => Dispatcher.UIThread.Invoke(() => AppendTaskLog(line)),
 				desktopPackagingOptionsProvider: DesktopPackagingOptionsProvider);
 			_workspace.ScriptInputAvailabilityChanged += ScriptInputAvailabilityChanged;
+			_workspace.ScriptInputRequested += ScriptInputRequested;
 			if (stored is not null) await _workspace.RestoreAsync(stored, profile);
 			else await _workspace.InitializeAsync();
 			_current = stored ?? new StoredConversation { ProfileId = profile.Id, Binding = profile.Binding, ProfileSnapshot = profile, Name = SessionName };
@@ -420,10 +423,16 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 	{
 		if (!IsScriptInputAvailable || _workspace is null) return;
 		var input = ScriptInput;
+		var requestVersion = _scriptInputRequestVersion;
 		ScriptInput = "";
-		try { await _workspace.SendScriptInputAsync(input); }
+		try
+		{
+			await _workspace.SendScriptInputAsync(input);
+			if (requestVersion == _scriptInputRequestVersion) IsScriptInteractionExpanded = false;
+		}
 		catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException)
 		{
+			if (IsScriptInputAvailable) ScriptInput = input;
 			Status = string.Format(ChatText.ScriptInputError, ex.Message);
 		}
 	}
@@ -431,7 +440,12 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 	private void ScriptInputAvailabilityChanged(bool available) => Dispatcher.UIThread.Invoke(() =>
 	{
 		IsScriptInputAvailable = available;
-		if (!available) ScriptInput = "";
+		if (!available) { ScriptInput = ""; IsScriptInteractionExpanded = false; }
+	});
+	private void ScriptInputRequested() => Dispatcher.UIThread.Invoke(() =>
+	{
+		_scriptInputRequestVersion++;
+		if (IsScriptInputAvailable) IsScriptInteractionExpanded = true;
 	});
 
 	[RelayCommand]

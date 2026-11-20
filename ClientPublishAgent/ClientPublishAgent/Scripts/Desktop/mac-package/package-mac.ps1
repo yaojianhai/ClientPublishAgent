@@ -48,6 +48,9 @@ function Submit-ForNotarization {
 		Write-Host $outputText
 	}
 	if ($exitCode -ne 0) {
+		if ($outputText -match 'HTTPClientError\.connectTimeout') {
+			throw "Apple 公证连接超时：$Description。提交状态不确定，请先使用 xcrun notarytool history --keychain-profile '<公证配置名称>' 查看提交记录，不要自动重复提交；公证及票据装订验证完成前不要分发安装包。"
+		}
 		throw "Apple 公证提交失败（退出代码：$exitCode）：$Description"
 	}
 

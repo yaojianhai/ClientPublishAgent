@@ -39,7 +39,10 @@ internal static class PackagingFailureDiagnostics
 		if (Contains("bundle format unrecognized") || Contains("code object is not signed") || Contains("errSecInternalComponent") ||
 			Contains("命令执行失败：codesign") || Contains("codesign failed"))
 			signals.Add("macOS code signing failed; inspect the local codesign error and signing configuration.");
-		if (Contains("notarytool") && (Contains("failed") || Contains("失败") || Contains("error:")))
+		if (Contains("Apple 公证连接超时") || (Contains("Apple 公证提交失败") && Contains("HTTPClientError.connectTimeout")))
+			signals.Add("Apple notarization reported a connection timeout. Submission status is unknown: check notarization history before resubmitting, and do not distribute a DMG until notarization and stapling are verified.");
+		else if (Contains("Apple 公证提交失败") || Contains("Apple 未接受") ||
+			(Contains("notarytool") && (Contains("failed") || Contains("失败") || Contains("error:"))))
 			signals.Add("macOS notarization reported an error; inspect the local notarytool output.");
 		if (Contains("不支持目标架构") || Contains("bad cpu type") || Contains("exec format error") || Contains("cross-OS native compilation is not supported"))
 			signals.Add("A target architecture or executable compatibility error was reported.");

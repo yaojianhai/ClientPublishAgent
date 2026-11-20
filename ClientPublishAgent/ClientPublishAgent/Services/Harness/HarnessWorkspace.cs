@@ -118,6 +118,12 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
         remove => _taskRunner.InputAvailabilityChanged -= value;
     }
 
+    public event Action ScriptInputRequested
+    {
+        add => _taskRunner.InputRequested += value;
+        remove => _taskRunner.InputRequested -= value;
+    }
+
     /// <summary>Sends one line directly to the running task, not to the model.</summary>
     public Task SendScriptInputAsync(string input, CancellationToken cancellationToken = default) =>
         _taskRunner.SendInputAsync(input, cancellationToken);
