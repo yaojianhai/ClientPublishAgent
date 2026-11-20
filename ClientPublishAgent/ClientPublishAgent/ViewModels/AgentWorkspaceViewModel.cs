@@ -36,6 +36,7 @@ public partial class AgentWorkspaceViewModel : ViewModelBase
 	public bool IsChatEmpty => ChatItems.Count == 0;
 	public ObservableCollection<AgentProfile> Profiles { get; } = [];
 	public ObservableCollection<StoredConversation> Sessions { get; } = [];
+	[ObservableProperty] public partial DateTimeOffset HistoryNow { get; set; } = DateTimeOffset.UtcNow;
 	[ObservableProperty] public partial AgentProfile? SelectedProfile { get; set; }
 	[ObservableProperty] public partial StoredConversation? SelectedSession { get; set; }
 	[ObservableProperty] public partial string ProfileName { get; set; } = "Personal Assistant";

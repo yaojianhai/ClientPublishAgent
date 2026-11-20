@@ -14,6 +14,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Themes.Fluent;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 
@@ -1073,6 +1074,21 @@ finally
 
     static async Task CheckChatInteractionAsync(FakeModel model, string root, string keyName, CancellationToken ct, bool historyOrderOnly = false)
     {
+        if (historyOrderOnly)
+        {
+            var now = new DateTimeOffset(2026, 11, 20, 12, 0, 0, TimeSpan.Zero);
+            foreach (var (elapsed, expected) in new[]
+            {
+                (TimeSpan.FromSeconds(-1), "刚刚"), (TimeSpan.FromSeconds(59), "刚刚"),
+                (TimeSpan.FromMinutes(1), "1分钟前"), (TimeSpan.FromMinutes(59), "59分钟前"),
+                (TimeSpan.FromHours(2), "2小时前"), (TimeSpan.FromHours(23), "23小时前"),
+                (TimeSpan.FromDays(3), "3天前"), (TimeSpan.FromDays(29), "29天前"),
+                (TimeSpan.FromDays(30), "1个月前"), (TimeSpan.FromDays(365), "1年前")
+            })
+                Check(SessionRelativeTimeConverter.Format(now - elapsed, now) == expected, "relative history time: " + expected);
+            Check(SessionRelativeTimeConverter.Format(now.ToOffset(TimeSpan.FromHours(8)).AddHours(-2), now) == "2小时前",
+                "relative history time accounts for timestamp offsets");
+        }
         if (!OperatingSystem.IsWindows())
         {
             Console.WriteLine("SKIP: live chat window checks require Windows.");
@@ -1168,6 +1184,76 @@ finally
                                 ui.ChatItems[1].Text == "first ordered reply" && ui.ChatItems[2].Text == "second turn question" &&
                                 ui.ChatItems[3].Text == "second turn reply",
                                 "restoring history displays every saved user and assistant turn");
+                            var clock = DateTimeOffset.UtcNow;
+                            var otherSession = ui.Sessions.Single(s => s.Id != earlierSessionId);
+                            var longTitle = "这是很长的历史会话标题用于验证相对时间不会被挤掉";
+                            store.Save(store.Load(earlierSessionId) with { Name = longTitle, Updated = clock.AddHours(-2), UnsafeToResume = true }, false);
+                            store.Save(store.Load(otherSession.Id) with { Updated = clock.AddDays(-3) }, false);
+                            ui.RefreshSessionsCommand.Execute(null);
+                            ui.HistoryNow = clock;
+                            await LayoutAsync();
+                            Button SessionButton(Guid id) => view.GetVisualDescendants().OfType<Button>()
+                                .Single(b => b.Classes.Contains("session-open") && b.DataContext is StoredConversation session && session.Id == id);
+                            string? SessionTime(Guid id) => SessionButton(id).GetVisualDescendants().OfType<TextBlock>()
+                                .Single(t => t.Classes.Contains("session-time")).Text;
+                            Check(SessionTime(earlierSessionId) == "2小时前" && SessionTime(otherSession.Id) == "3天前",
+                                "history rows render the stored update time separately in relative format");
+                            var title = SessionButton(earlierSessionId).GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == longTitle);
+                            var time = SessionButton(earlierSessionId).GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("session-time"));
+                            Check(title.TextTrimming == Avalonia.Media.TextTrimming.CharacterEllipsis && title.Bounds.Right <= time.Bounds.Left && time.Bounds.Width > 0,
+                                "long history names are truncated without obscuring the relative time");
+                            var button = SessionButton(earlierSessionId);
+                            var row = button.GetVisualAncestors().OfType<Border>().First(b => b.Classes.Contains("session-row"));
+                            var actions = row.GetVisualDescendants().OfType<Button>().Single(b => b.Classes.Contains("session-actions"));
+                            Check(time.Opacity == 1 && actions.Opacity == 0 && !actions.IsHitTestVisible,
+                                "history normally shows relative time rather than the actions button");
+                            ((IPseudoClasses)row.Classes).Add(":pointerover");
+                            await LayoutAsync();
+                            Check(time.Opacity == 0 && actions.Opacity == 1 && actions.IsHitTestVisible,
+                                "hover replaces relative time with the actions button");
+                            var tip = ToolTip.GetTip(button) as StackPanel ?? throw new InvalidOperationException("History tooltip missing.");
+                            ToolTip.SetIsOpen(button, true);
+                            await LayoutAsync();
+                            var tipTitle = tip.Children[0] as TextBlock;
+                            var tipDetails = tip.Children[1] as StackPanel;
+                            var tipTime = tipDetails?.Children.OfType<TextBlock>().SingleOrDefault();
+                            Check(ToolTip.GetIsOpen(button) && ToolTip.GetPlacement(button) == PlacementMode.Right &&
+                                tip.Children.Count == 2 && tipTitle?.Text == longTitle &&
+                                tipTime?.Text == "更新于 " + clock.AddHours(-2).LocalDateTime.ToString("yyyy/MM/dd HH:mm:ss"),
+                                "right-side history tooltip shows the full name and local update time only");
+                            ToolTip.SetIsOpen(button, false);
+                            actions.Flyout!.ShowAt(actions);
+                            Check(actions.Flyout.IsOpen, "history actions menu opens on hover");
+                            actions.Flyout.Hide();
+                            ((IPseudoClasses)row.Classes).Remove(":pointerover");
+                            await LayoutAsync();
+                            Check(time.Opacity == 1 && actions.Opacity == 0 && !actions.IsHitTestVisible,
+                                "relative time returns after leaving the history row");
+                            Check(SessionButton(earlierSessionId).GetVisualDescendants().OfType<TextBlock>()
+                                .Any(t => t.Text == "⚠" && t.IsVisible && ToolTip.GetTip(t)?.ToString() == "审批已失效"),
+                                "history retains the expired-approval indicator");
+                            ui.HistoryNow = clock.AddHours(1);
+                            await LayoutAsync();
+                            Check(SessionTime(earlierSessionId) == "3小时前" && store.Load(earlierSessionId).Updated == clock.AddHours(-2),
+                                "clock refresh updates visible time without changing stored history");
+                            Check(ui.Sessions.Select(s => s.Id).SequenceEqual(new[] { earlierSessionId, otherSession.Id }),
+                                "relative time display preserves history ordering");
+                            var timer = typeof(AgentView).GetField("_historyTimer", BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(view) as DispatcherTimer
+                                ?? throw new InvalidOperationException("History timer was not created.");
+                            Check(timer.IsEnabled, "history timer runs while the view is attached");
+                            var ticked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                            EventHandler onTick = (_, _) => ticked.TrySetResult();
+                            timer.Tick += onTick;
+                            timer.Interval = TimeSpan.FromMilliseconds(20);
+                            await ticked.Task.WaitAsync(TimeSpan.FromSeconds(3), stop.Token);
+                            timer.Tick -= onTick;
+                            timer.Interval = TimeSpan.FromMinutes(1);
+                            Check((DateTimeOffset.UtcNow - ui.HistoryNow).Duration() < TimeSpan.FromSeconds(3),
+                                "history timer refreshes the clock from the current time");
+                            window.Content = null;
+                            Check(!timer.IsEnabled, "history timer stops when the view is detached");
+                            window.Content = view;
+                            Check(timer.IsEnabled, "history timer restarts when the view is reattached");
                             completion.TrySetResult();
                             return;
                         }
@@ -2756,9 +2842,12 @@ sealed class FakeModel : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        var alreadyFailed = server.IsFaulted;
         stop.Cancel();
         listener.Close();
         try { await server; }
+        catch (OperationCanceledException) when (!alreadyFailed && stop.IsCancellationRequested) { }
+        catch (ObjectDisposedException) when (!alreadyFailed && stop.IsCancellationRequested) { }
         finally { stop.Dispose(); }
     }
 }

@@ -3,10 +3,12 @@
              xmlns:vm="using:ClientPublishAgent.ViewModels"
              xmlns:h="using:ClientPublishAgent.Services.Harness"
              xmlns:r="using:ClientPublishAgent.Resources"
+             xmlns:views="using:ClientPublishAgent.Views"
              x:Class="ClientPublishAgent.Views.AgentView"
              x:DataType="vm:AgentWorkspaceViewModel">
     <UserControl.Resources>
         <ResourceDictionary>
+            <views:SessionRelativeTimeConverter x:Key="SessionRelativeTimeConverter" />
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Light">
                     <SolidColorBrush x:Key="ChatUserBrush" Color="#F2F4F7" />
@@ -113,6 +115,9 @@
             <Setter Property="Opacity" Value="1" />
             <Setter Property="IsHitTestVisible" Value="True" />
         </Style>
+        <Style Selector="Border.session-row:pointerover TextBlock.session-time">
+            <Setter Property="Opacity" Value="0" />
+        </Style>
     </UserControl.Styles>
     <Grid RowDefinitions="*,Auto">
         <Grid x:Name="WorkspaceGrid" ColumnDefinitions="280,5,4*,Auto,2*">
@@ -137,20 +142,44 @@
                                 <DataTemplate x:DataType="h:StoredConversation">
                                     <Border Classes="session-row" Padding="4,2">
                                         <Grid ColumnDefinitions="*,Auto">
-                                            <Button Grid.Column="0"
+                                            <Button Grid.Column="0" Grid.ColumnSpan="2"
                                                     Classes="session-open"
                                                     Click="SessionItemClicked"
                                                     HorizontalAlignment="Stretch"
-                                                    HorizontalContentAlignment="Left"
+                                                    HorizontalContentAlignment="Stretch"
                                                     VerticalContentAlignment="Center"
                                                     Background="Transparent"
                                                     BorderThickness="0"
-                                                    Padding="8,4,4,4">
-                                                <TextBlock Text="{Binding}"
-                                                           TextTrimming="CharacterEllipsis"
-                                                           TextWrapping="NoWrap"
-                                                           FontSize="13"
-                                                           FontWeight="Medium" />
+                                                    Padding="8,4"
+                                                    ToolTip.Placement="Right">
+                                                <ToolTip.Tip>
+                                                    <StackPanel Spacing="8" MaxWidth="320">
+                                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                                            <Path Width="14" Height="14" Stretch="Uniform" Stroke="{DynamicResource ChatMutedBrush}" StrokeThickness="1.2"
+                                                                  Data="M3 2 L3 0 M9 2 L9 0 M1 4 L11 4 M2 1 L10 1 Q11 1 11 2 L11 10 Q11 11 10 11 L2 11 Q1 11 1 10 L1 2 Q1 1 2 1 Z" />
+                                                            <TextBlock Text="{Binding Updated.LocalDateTime, StringFormat='更新于 {0:yyyy/MM/dd HH:mm:ss}'}" Classes="muted" />
+                                                        </StackPanel>
+                                                    </StackPanel>
+                                                </ToolTip.Tip>
+                                                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
+                                                    <TextBlock Text="{Binding Name}"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               TextWrapping="NoWrap"
+                                                               VerticalAlignment="Center"
+                                                               FontSize="13"
+                                                               FontWeight="Medium" />
+                                                    <TextBlock Grid.Column="1" Text="⚠" IsVisible="{Binding UnsafeToResume}"
+                                                               ToolTip.Tip="审批已失效" AutomationProperties.Name="审批已失效" VerticalAlignment="Center" />
+                                                    <TextBlock Grid.Column="2" Classes="muted session-time" FontSize="11" VerticalAlignment="Center">
+                                                        <TextBlock.Text>
+                                                            <MultiBinding Converter="{StaticResource SessionRelativeTimeConverter}">
+                                                                <Binding Path="Updated" />
+                                                                <Binding Path="$parent[views:AgentView].((vm:AgentWorkspaceViewModel)DataContext).HistoryNow" />
+                                                            </MultiBinding>
+                                                        </TextBlock.Text>
+                                                    </TextBlock>
+                                                </Grid>
                                             </Button>
                                             <Button Grid.Column="1"
                                                     Classes="session-actions"
@@ -158,10 +187,11 @@
                                                     ToolTip.Tip="更多操作"
                                                     Padding="0"
                                                     VerticalAlignment="Center"
+                                                    HorizontalAlignment="Right"
                                                     HorizontalContentAlignment="Center"
                                                     VerticalContentAlignment="Center"
-                                                    Width="40"
-                                                    Height="40"
+                                                    Width="28"
+                                                    Height="32"
                                                     FontSize="18"
                                                     Background="Transparent"
                                                     BorderThickness="0">

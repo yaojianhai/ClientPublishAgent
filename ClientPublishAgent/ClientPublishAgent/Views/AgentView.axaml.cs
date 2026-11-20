@@ -19,6 +19,7 @@ public partial class AgentView : UserControl
 	private bool _attached;
 	private bool _followTail = true;
 	private bool _scrollQueued;
+	private readonly DispatcherTimer _historyTimer = new() { Interval = TimeSpan.FromMinutes(1) };
 
 	public AgentView() : this(new AgentWorkspaceViewModel()) { }
 
@@ -27,6 +28,7 @@ public partial class AgentView : UserControl
 	{
 		ArgumentNullException.ThrowIfNull(viewModel);
 		InitializeComponent();
+		_historyTimer.Tick += (_, _) => UpdateHistoryClock();
 		ChatInput.AddHandler(InputElement.KeyDownEvent, ChatInputKeyDown, RoutingStrategies.Tunnel);
 		DataContextChanged += (_, _) => BindMessages();
 		DataContext = viewModel;
@@ -37,11 +39,13 @@ public partial class AgentView : UserControl
 		base.OnAttachedToVisualTree(e);
 		_attached = true;
 		BindMessages();
+		_historyTimer.Start();
 	}
 
 	protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
 	{
 		_attached = false;
+		_historyTimer.Stop();
 		UnbindMessages();
 		base.OnDetachedFromVisualTree(e);
 	}
@@ -51,12 +55,18 @@ public partial class AgentView : UserControl
 		UnbindMessages();
 		if (!_attached || DataContext is not AgentWorkspaceViewModel viewModel) return;
 		_messagesOwner = viewModel;
+		UpdateHistoryClock();
 		WorkspaceGrid.ColumnDefinitions[4].Width = viewModel.IsDetailsVisible ? new GridLength(2, GridUnitType.Star) : new GridLength(0);
 		viewModel.ChatItems.CollectionChanged += MessagesChanged;
 		viewModel.PropertyChanged += WorkspaceChanged;
 		foreach (var entry in viewModel.ChatItems) Observe(entry);
 		_followTail = true;
 		QueueScroll();
+	}
+
+	private void UpdateHistoryClock()
+	{
+		if (DataContext is AgentWorkspaceViewModel viewModel) viewModel.HistoryNow = DateTimeOffset.UtcNow;
 	}
 
 	private void UnbindMessages()
