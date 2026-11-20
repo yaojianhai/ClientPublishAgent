@@ -625,6 +625,26 @@ finally
         await workspace.SendAsync("查找刚才失败的原因", cancellationToken: token);
         Check(model.Requests.Last().Contains("Git source synchronization failed") && !model.Requests.Last().Contains("PRIVATE_DIAGNOSTIC_SECRET"),
             "subsequent diagnosis uses retained classification without exposing the raw log");
+        await File.WriteAllTextAsync(Path.Combine(source, "diagnostic-failure"), "curl: (22) The requested URL returned error: 404\n下载制品失败：PRIVATE_DIAGNOSTIC_SECRET", token);
+        model.EnqueueTool("publish_latest_desktop_packages", new { nextVersion = "1.2.0" });
+        approval = (await workspace.SendAsync("发布", cancellationToken: token)).Approvals.Single();
+        model.EnqueueText("failed");
+        await workspace.DecideAsync(approval.Id, true, cancellationToken: token);
+        Check(model.Requests.Last().Contains("An artifact download failed") && !model.Requests.Last().Contains("The artifact download received HTTP 403") &&
+            !model.Requests.Last().Contains("PRIVATE_DIAGNOSTIC_SECRET"), "non-403 download failure is not misclassified or disclosed");
+        await File.WriteAllTextAsync(Path.Combine(source, "diagnostic-failure"),
+            "缓存不存在，将下载制品：PRIVATE_DIAGNOSTIC_SECRET/openclaw-release.tgz\ncurl: (22) The requested URL returned error: 403\n下载制品失败：PRIVATE_DIAGNOSTIC_SECRET", token);
+        model.EnqueueTool("publish_latest_desktop_packages", new { nextVersion = "1.2.0" });
+        approval = (await workspace.SendAsync("发布", cancellationToken: token)).Approvals.Single();
+        model.EnqueueText("failed");
+        await workspace.DecideAsync(approval.Id, true, cancellationToken: token);
+        Check(model.Requests.Last().Contains("The artifact download received HTTP 403") && model.Requests.Last().Contains("The OpenClaw archive was absent") &&
+            !model.Requests.Last().Contains("PRIVATE_DIAGNOSTIC_SECRET"), "403 and missing cache produce precise signals without raw paths or secrets");
+        model.EnqueueTool("read_last_packaging_failure", new { });
+        model.EnqueueText("diagnosed");
+        await workspace.SendAsync("排查刚才失败的原因", cancellationToken: token);
+        Check(model.Requests.Last().Contains("The artifact download received HTTP 403") && !model.Requests.Last().Contains("PRIVATE_DIAGNOSTIC_SECRET"),
+            "subsequent diagnosis retains the 403 classification without raw output");
         await File.WriteAllTextAsync(Path.Combine(source, "diagnostic-failure"), "unrecognized PRIVATE_DIAGNOSTIC_SECRET", token);
         model.EnqueueTool("publish_latest_desktop_packages", new { nextVersion = "1.2.0" });
         approval = (await workspace.SendAsync("发布", cancellationToken: token)).Approvals.Single();
@@ -1174,6 +1194,13 @@ finally
             await workspace.InitializeAsync(ct);
             model.EnqueueTool("write_workspace_file", new { path = "session-once.txt", content = "once" });
             var approval = (await workspace.SendAsync("write once", cancellationToken: ct)).Approvals.Single();
+            using (var request = JsonDocument.Parse(model.Requests.Last()))
+            {
+                var messages = request.RootElement.GetProperty("messages").EnumerateArray();
+                Check(messages.Any(m => m.GetProperty("role").GetString() == "system" &&
+                    m.GetProperty("content").ToString().Contains("区分已确认事实与猜测")),
+                    "general troubleshooting guidance is sent even without packaging enabled");
+            }
             model.EnqueueText("once done");
             await workspace.DecideAsync(approval.Id, true, cancellationToken: ct);
             Check(!workspace.ApproveForSession && File.ReadAllText(Path.Combine(root, "session-once.txt")) == "once", "single approval does not grant session access");

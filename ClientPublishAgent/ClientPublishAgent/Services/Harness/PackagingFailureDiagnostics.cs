@@ -21,8 +21,19 @@ internal static class PackagingFailureDiagnostics
 			signals.Add("A .NET compilation or SDK error was reported; check the local log for its code.");
 		if (Contains("未找到 macOS 差分工具") || Contains("未找到 Linux 差分工具") || Contains("Plugin script missing"))
 			signals.Add("A packaging script or platform-specific differential tool is missing.");
-		if (Contains("ARTIFACTORY_API_TOKEN") || Contains("下载制品失败"))
-			signals.Add("Artifact authentication or download failed; check local credentials and network access without sharing secrets.");
+		if (Contains("下载制品失败"))
+		{
+			if (Match(@"curl:\s*\(22\)[^\r\n]*\b403\b"))
+				signals.Add("The artifact download received HTTP 403. The server or an intermediary refused the request; this alone does not identify whether credentials, permissions, network or policy caused it. Compare a working request without exposing credentials.");
+			else
+				signals.Add("An artifact download failed; inspect the local curl error before deciding whether authentication, permissions or network is responsible.");
+			if (Match(@"缓存不存在，将下载制品：[^\r\n]*openclaw-release\.tgz"))
+				signals.Add("The OpenClaw archive was absent from the target cache, triggering a download.");
+			else if (Match(@"下载参数指定重新下载制品：[^\r\n]*openclaw-release\.tgz"))
+				signals.Add("The execution requested an OpenClaw refresh; check the user's request and approval before assuming it was intentional.");
+		}
+		if (Contains("未设置 Artifactory API 令牌"))
+			signals.Add("The artifact API token was not set in the packaging process; do not disclose the token.");
 		if (Contains("permission denied") || Contains("access is denied") || Contains("权限不足"))
 			signals.Add("A permission error was reported; inspect the local log for the affected operation.");
 		if (Contains("bundle format unrecognized") || Contains("code object is not signed") || Contains("errSecInternalComponent") ||
@@ -38,7 +49,7 @@ internal static class PackagingFailureDiagnostics
 		var state = exitCode.HasValue ? $"exit code {exitCode.Value}" : "failed before a process exit code was available";
 		var result = $"Packaging failed for {runtime} ({state}). " +
 			(signals.Count > 0 ? "Possible diagnostic signals (verify against the local task log): " + string.Join(" ", signals) :
-				"No recognized error signal was found. Ask the user for the redacted final error from the local task log; do not scan the workspace or rerun packaging.");
+				"No recognized error signal was found. Use evidence already provided by the user; if necessary ask for the missing redacted final error from the local task log. Do not scan the workspace or rerun packaging.");
 		if (truncated) result += " Only the last 8192 characters of each output stream were inspected; earlier errors may be missing.";
 		return result + " Raw task output is local and was not sent to the model.";
 	}
