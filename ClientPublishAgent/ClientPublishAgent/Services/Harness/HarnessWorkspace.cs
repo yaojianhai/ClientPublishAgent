@@ -988,7 +988,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
             return new GenericSnapshot(Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(string.Join("\n", hashes)))),
                 command.Directory, "输出根目录：" + command.OutputRoot + "\n目标平台：" + request.RuntimeIdentifier + "\n当前版本：" + request.CurrentVersion + "\n下次版本：" + request.NextVersion +
                 (name == "publish_latest_desktop_packages" ? "\nNative AOT：" + (request.PublishAot ? "开启" : "关闭") : "") +
-                (name == "publish_latest_desktop_packages" ? "\nOpenClaw：" + (request.RefreshOpenClaw == true ? "重新下载" : "使用缓存，缺失时下载") + "\nnode_modules：" + (request.RefreshNodeModules == true ? "重新下载" : "使用缓存，缺失时下载") : "") + (effectiveOssHost.Length > 0 ? "\n升级地址：" + effectiveOssHost : "") +
+                (name == "publish_latest_desktop_packages" ? "\n制品缓存目录：" + Path.Combine(command.OutputRoot, "OpenClaw") + "\nOpenClaw：" + (request.RefreshOpenClaw == true ? "重新下载" : "使用缓存，缺失时下载") + "\nnode_modules：" + (request.RefreshNodeModules == true ? "重新下载" : "使用缓存，缺失时下载") : "") + (effectiveOssHost.Length > 0 ? "\n升级地址：" + effectiveOssHost : "") +
                 (name == "publish_latest_desktop_packages" && request.Task == "macos-package" ?
                     (string.IsNullOrWhiteSpace(request.SigningIdentity) ? "\nmacOS：未签名测试包。" : "\nmacOS 签名身份：" + request.SigningIdentity + "\n公证配置：" + request.NotaryKeychainProfile) : "") + "\n" + TaskCatalog.Get(request.Task).Description +
                 (request.Task == "marketserver" ? "" : "\n发布前会在源码仓库执行 git pull --ff-only，修改本地检出并访问远端；拉取失败会停止发布。") +
@@ -1094,6 +1094,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
                                 var request = LatestDesktopRequest(partDoc.RootElement);
                                 targetName = request.RuntimeIdentifier;
                                 _output($"开始打包 {targetName}：{request.CurrentVersion} → {request.NextVersion}");
+                                _output($"制品缓存目录：{Path.Combine(TaskCatalog.GetDesktopOutputRoot(request.Task, request.ScriptsRoot, request.RuntimeIdentifier), "OpenClaw")}");
                                 code = await RunApprovedPluginAsync(name, part.Arguments, part.Snapshot, request, captured, ct, captured.Errors).ConfigureAwait(false);
                                 ct.ThrowIfCancellationRequested();
                                 progress.ThrowIfFailed();

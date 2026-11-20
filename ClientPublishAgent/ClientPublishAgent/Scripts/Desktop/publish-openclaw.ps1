@@ -115,7 +115,7 @@ function Download-OpenClawArtifact {
 	)
 	& $CurlExecutable @curlArguments
 	if ($LASTEXITCODE -ne 0) {
-		throw "下载制品失败：$Url"
+		throw "下载制品失败：$Url（curl 退出代码：$LASTEXITCODE）。请结合上方 curl 错误检查制品仓库权限、令牌及网络；不要公开令牌。"
 	}
 	Move-Item -Path $partialPath -Destination $DestinationPath -Force
 }
@@ -137,12 +137,15 @@ function Should-Download-OpenClawArtifact {
 	)
 
 	if (-not (Test-Path -Path $ArchivePath -PathType Leaf)) {
+		Write-Host "缓存不存在，将下载制品：$ArchivePath"
 		return $true
 	}
 
 	if ($null -ne $Redownload) {
 		if (-not $Redownload) {
 			Write-Host "使用已有压缩包：$ArchivePath"
+		} else {
+			Write-Host "下载参数指定重新下载制品：$ArchivePath"
 		}
 		return $Redownload
 	}

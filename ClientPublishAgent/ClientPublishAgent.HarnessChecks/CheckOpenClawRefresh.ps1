@@ -15,6 +15,14 @@ try {
 	if ($LASTEXITCODE -ne 0) { throw 'Failed to create fixture archive.' }
 	$fakeSevenZip = Join-Path $root 'fake-7zip.ps1'
 	Set-Content -LiteralPath $fakeSevenZip -Value 'param($action, $outputPath) if ($action -eq "a") { Set-Content -LiteralPath $outputPath -Value "fixture" }; $global:LASTEXITCODE = 0'
+	$fakeCurl = Join-Path $root 'fake-curl.ps1'
+	Set-Content -LiteralPath $fakeCurl -Value '[Console]::Error.WriteLine("curl: (22) The requested URL returned error: 403"); $global:LASTEXITCODE = 22'
+	try {
+		Download-OpenClawArtifact -Url 'https://example.test/artifact' -DestinationPath (Join-Path $root 'download') -ApiToken 'private-fixture-token' -CurlExecutable $fakeCurl
+		throw 'A failed download unexpectedly succeeded.'
+	} catch {
+		if ($_.Exception.Message -notmatch 'curl 退出代码：22' -or $_.Exception.Message -match 'private-fixture-token') { throw }
+	}
 	function Get-OpenClaw7ZipExecutable { return $fakeSevenZip }
 	function Get-OpenClawApiToken { return 'fixture-token' }
 	function Read-Host { param($Prompt) $script:prompts++; return $script:answers.Dequeue() }
@@ -31,6 +39,10 @@ try {
 	Copy-Item -LiteralPath $fixtureArchive -Destination $open
 	Set-Content -LiteralPath $node -Value 'cached-node'
 	if (Should-Download-OpenClawArtifact -ArchivePath $open -Redownload $false) { throw 'Legacy cache reuse changed.' }
+	$cacheDecision = @(Should-Download-OpenClawArtifact -ArchivePath $open -Redownload $false 6>&1)
+	if (($cacheDecision -join ' ') -notmatch '使用已有压缩包' -or $cacheDecision[-1] -ne $false) { throw 'Cache reuse decision was not logged.' }
+	$refreshDecision = @(Should-Download-OpenClawArtifact -ArchivePath $open -Redownload $true 6>&1)
+	if (($refreshDecision -join ' ') -notmatch '下载参数指定重新下载' -or $refreshDecision[-1] -ne $true) { throw 'Refresh decision was not logged.' }
 	$runtime = if ($IsWindows) { 'win-x64' } elseif ($IsMacOS) { 'osx-x64' } else { 'linux-x64' }
 	foreach ($case in @(
 		@{ Open = $false; Node = $false; Expected = @() },
@@ -46,6 +58,8 @@ try {
 		}
 	}
 	Remove-Item -LiteralPath $open
+	$missingDecision = @(Should-Download-OpenClawArtifact -ArchivePath $open -Redownload $false 6>&1)
+	if (($missingDecision -join ' ') -notmatch '缓存不存在' -or $missingDecision[-1] -ne $true) { throw 'Missing-cache decision was not logged.' }
 	if (-not (Should-Download-OpenClawArtifact -ArchivePath $open -Redownload $false)) { throw 'Legacy missing-cache behavior changed.' }
 	$script:downloads = @()
 	Install-OpenClawRuntime -PublishDirectory $publish -AiServiceDirectory $service -RuntimeIdentifier $runtime -RefreshOpenClaw $false -RefreshNodeModules $false

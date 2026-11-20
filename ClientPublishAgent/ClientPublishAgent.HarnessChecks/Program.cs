@@ -522,11 +522,13 @@ finally
         var approval = (await workspace.SendAsync("发布最新安装包+升级包", cancellationToken: token)).Approvals.Single();
         Check(approval.Details.Contains("当前版本：1.0.0") && approval.Details.Contains("下次版本：1.0.1") &&
             approval.Details.Contains("OpenClaw：使用缓存") && approval.Details.Contains("node_modules：使用缓存") &&
-            approval.Details.Contains("Native AOT：关闭") && approval.Details.Contains("https://example.test/updates/win-x64"), "skill uses shared configuration, initial versions and cached artifacts by default");
+            approval.Details.Contains("Native AOT：关闭") && approval.Details.Contains("https://example.test/updates/win-x64") &&
+            approval.Details.Contains(Path.Combine(outputRoot, "OpenClaw")), "skill uses shared configuration, initial versions and cached artifacts by default");
         Check(!File.Exists(resultFile), "skill does not execute before approval");
         Check(model.Requests.Last().Contains("publish_latest_desktop_packages"), "built-in skill is exposed to the model");
         model.EnqueueText("done");
         await workspace.DecideAsync(approval.Id, true, cancellationToken: token);
+        Check(logs.Any(s => s.Contains(Path.Combine(outputRoot, "OpenClaw"))), "local log identifies the actual artifact cache directory");
         using (var result = JsonDocument.Parse(await File.ReadAllTextAsync(resultFile, token)))
         {
             Check(result.RootElement.GetProperty("current").GetString() == "1.0.0" && result.RootElement.GetProperty("next").GetString() == "1.0.1" &&
