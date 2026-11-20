@@ -471,7 +471,8 @@ finally
         var resultFile = Path.Combine(source, "executed.json");
         await File.WriteAllTextAsync(Path.Combine(win, "publish-upgrade-package-win-x64.ps1"),
             "param($CurrentVersion,$NextVersion,$SourceDirectory,$RuntimeIdentifier,$PackageType,$PublishAot,$OssHost,$RefreshOpenClaw,$RefreshNodeModules)\n" +
-            "@{ current=$CurrentVersion; next=$NextVersion; source=$SourceDirectory; runtime=$RuntimeIdentifier; package=$PackageType; aot=$PublishAot; openclaw=$RefreshOpenClaw; node=$RefreshNodeModules } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $SourceDirectory 'executed.json')\n", token);
+            "if (Test-Path -LiteralPath (Join-Path $SourceDirectory 'diagnostic-failure')) { Write-Output ('x' * 20000); [Console]::Error.WriteLine((Get-Content -Raw -LiteralPath (Join-Path $SourceDirectory 'diagnostic-failure'))); exit 7 }\n" +
+            "@{ current=$CurrentVersion; next=$NextVersion; source=$SourceDirectory; runtime=$RuntimeIdentifier; package=$PackageType; aot=$PublishAot; openclaw=$RefreshOpenClaw; node=$RefreshNodeModules; pathFirst=($env:PATH -split [IO.Path]::PathSeparator)[0] } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $SourceDirectory 'executed.json')\n", token);
         var logs = new ConcurrentQueue<string>();
         var profile = new AgentProfile { Name = "Packaging skill", Endpoint = model.Endpoint, Model = "fake-model", KeyEnvironmentVariable = keyName,
             WorkspaceRoot = root, ScriptsDirectory = scripts, Packaging = true };
@@ -492,6 +493,8 @@ finally
                 result.RootElement.GetProperty("runtime").GetString() == "win-x64" && result.RootElement.GetProperty("package").GetString() == "upgrade-installer" &&
                 result.RootElement.GetProperty("source").GetString() == source && result.RootElement.GetProperty("openclaw").GetString() == "false" &&
                 result.RootElement.GetProperty("node").GetString() == "false", "approved skill passes exact versions and default download choices");
+            Check(result.RootElement.GetProperty("pathFirst").GetString() == (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator)[0],
+                "agent inherits the same PATH as manual packaging");
         }
 
         foreach (var choice in new[] { (Open: true, Node: false), (Open: false, Node: true), (Open: true, Node: true) })
@@ -557,6 +560,32 @@ finally
             }
         }
         Check(await File.ReadAllTextAsync(resultFile, token) == priorResult, "invalid targets never start a package script");
+        await File.WriteAllTextAsync(Path.Combine(source, "diagnostic-failure"), "fatal: unable to access PRIVATE_DIAGNOSTIC_SECRET", token);
+        model.EnqueueTool("publish_latest_desktop_packages", new { nextVersion = "1.2.0" });
+        approval = (await workspace.SendAsync("发布", cancellationToken: token)).Approvals.Single();
+        model.EnqueueText("failed");
+        await workspace.DecideAsync(approval.Id, true, cancellationToken: token);
+        Check(logs.Any(line => line.Contains("PRIVATE_DIAGNOSTIC_SECRET")), "complete error stays available in local task output");
+        Check(model.Requests.Last().Contains("Git source synchronization failed") && model.Requests.Last().Contains("last 8192 characters") &&
+            !model.Requests.Last().Contains("PRIVATE_DIAGNOSTIC_SECRET"), "failure returns classified tail without sending raw logs to model");
+        model.EnqueueTool("read_last_packaging_failure", new { });
+        model.EnqueueText("diagnosed");
+        await workspace.SendAsync("查找刚才失败的原因", cancellationToken: token);
+        Check(model.Requests.Last().Contains("Git source synchronization failed") && !model.Requests.Last().Contains("PRIVATE_DIAGNOSTIC_SECRET"),
+            "subsequent diagnosis uses retained classification without exposing the raw log");
+        await File.WriteAllTextAsync(Path.Combine(source, "diagnostic-failure"), "unrecognized PRIVATE_DIAGNOSTIC_SECRET", token);
+        model.EnqueueTool("publish_latest_desktop_packages", new { nextVersion = "1.2.0" });
+        approval = (await workspace.SendAsync("发布", cancellationToken: token)).Approvals.Single();
+        model.EnqueueText("failed");
+        await workspace.DecideAsync(approval.Id, true, cancellationToken: token);
+        Check(model.Requests.Last().Contains("No recognized error signal was found") && !model.Requests.Last().Contains("PRIVATE_DIAGNOSTIC_SECRET"),
+            "unknown failure asks for a redacted local error instead of inventing a cause");
+        await workspace.ResetAsync(token);
+        model.EnqueueTool("read_last_packaging_failure", new { });
+        model.EnqueueText("no diagnosis");
+        await workspace.SendAsync("查找刚才失败的原因", cancellationToken: token);
+        Check(model.Requests.Last().Contains("No packaging failure diagnostic is available"), "reset clears the previous session diagnostic");
+        File.Delete(Path.Combine(source, "diagnostic-failure"));
         Console.WriteLine("Agent latest desktop packaging skill checks passed.");
     }
 
@@ -639,7 +668,7 @@ finally
         await workspace.DecideAsync(approvals[0].Id, true, cancellationToken: token);
         model.EnqueueText("stopped");
         await workspace.DecideAsync(approvals[1].Id, true, cancellationToken: token);
-        Check((await File.ReadAllLinesAsync(runs, token)).Length == 4 && model.Requests.Last().Contains("completed: linux-arm64") &&
+        Check((await File.ReadAllLinesAsync(runs, token)).Length == 4 && model.Requests.Last().Contains("Completed: linux-arm64") &&
             model.Requests.Last().Contains("remaining architectures not run"), "changed second-architecture history prevents stale execution and reports partial completion");
         File.Delete(Path.Combine(source, "change-x64"));
         model.EnqueueTool("publish_latest_desktop_packages", new { architecture = "arm64,x64", nextVersion = "1.1.0" });

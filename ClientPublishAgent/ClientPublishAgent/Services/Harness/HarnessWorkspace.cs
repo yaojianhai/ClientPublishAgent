@@ -66,6 +66,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
     private readonly HashSet<string> _terminalCommandsThisTurn = new(StringComparer.Ordinal);
     private string? _lastTerminalResult;
     private int _matchingTerminalResults;
+    private string? _lastPackagingFailure;
     private readonly HttpClient _http;
     private readonly SearxSearch _search = new();
     private readonly ApprovedSkillsProvider? _skillsProvider;
@@ -211,6 +212,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
         {
             tools.Add(new ApprovalRequiredAIFunction(AIFunctionFactory.Create(PluginAsync, "run_task_plugin", "Execute approved platform plugin: windows-package, linux-package, macos-package, marketserver. Scripts root is configured by user. Versions x.y.z; runtime required. Use an empty ossHost to use the user's configured upgrade address; only supply a full platform-specific address when explicitly requested.")));
             tools.Add(new ApprovalRequiredAIFunction(AIFunctionFactory.Create(PublishLatestDesktopAsync, "publish_latest_desktop_packages", "Publish desktop installer and upgrade packages for one or more requested architectures on the current system. Supply all explicitly requested architectures in one comma-separated architecture string; approve each and execute sequentially. Only pass a nextVersion or architecture explicitly requested by the user; otherwise use empty strings.")));
+            tools.Add(AIFunctionFactory.Create(ReadLastPackagingFailure, "read_last_packaging_failure", "Read a local, privacy-safe classification of the latest packaging failure in this live session. Does not expose raw logs, paths, source code or credentials."));
         }
         if (settings.Profile?.WebSearch == true)
             tools.Add(new ApprovalRequiredAIFunction(AIFunctionFactory.Create(SearchWebAsync, "search_web",
@@ -270,6 +272,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
                 ?? throw new InvalidOperationException("内置桌面发布技能资源缺失。");
             using var reader = new StreamReader(stream);
             instructions += "\n\n内置发布技能：\n" + reader.ReadToEnd();
+            instructions += "\n用户要求排查打包失败时，先调用 read_last_packaging_failure，基于其中的有限证据回答；不要重跑发布，不要遍历或扫描整个工作区。若无明确诊断，说明无法确定原因，请用户从本地任务日志提供脱敏后的具体错误。";
         }
         return instructions;
     }
@@ -341,7 +344,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
             ThrowIfDisposed();
             await StopBackgroundAsync().ConfigureAwait(false);
             _session = null;
-            lock (_sync) { _pending.Clear(); _grants.Clear(); _genericPending.Clear(); _genericGrants.Clear(); _approveForSession = false; _state = HarnessState.Uninitialized; }
+            lock (_sync) { _pending.Clear(); _grants.Clear(); _genericPending.Clear(); _genericGrants.Clear(); _approveForSession = false; _lastPackagingFailure = null; _state = HarnessState.Uninitialized; }
             _session = await _agent.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
             SetState(HarnessState.Ready);
         }
@@ -736,6 +739,19 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
         ExecuteGenericAsync("run_task_plugin", new Dictionary<string, object?> { ["task"] = task, ["runtimeIdentifier"] = runtimeIdentifier,
             ["currentVersion"] = currentVersion, ["nextVersion"] = nextVersion, ["ossHost"] = ossHost }, cancellationToken);
 
+    [Description("Get a privacy-safe classification of the most recent packaging failure in this live session; no raw output is disclosed.")]
+    private string ReadLastPackagingFailure()
+    {
+        lock (_sync) return _lastPackagingFailure ?? "No packaging failure diagnostic is available in this live session. Ask the user for the redacted error from the local task log; do not scan the workspace or rerun packaging.";
+    }
+
+    private string RecordPackagingFailure(string runtime, int? exitCode, string output, bool truncated)
+    {
+        var diagnosis = PackagingFailureDiagnostics.Describe(runtime, exitCode, output, truncated);
+        lock (_sync) _lastPackagingFailure = diagnosis;
+        return diagnosis;
+    }
+
     private Task<string> PublishLatestDesktopAsync(
         [Description("Explicit next version x.y.z, or empty when not specified by the user")] string nextVersion = "",
         [Description("Requested architectures separated by commas: x64, arm64 (arm means arm64); or empty for the current OS architecture")] string architecture = "",
@@ -1007,6 +1023,8 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
         {
             lock (_sync) { _lastTerminalResult = null; _matchingTerminalResults = 0; }
         }
+        if (name is "publish_latest_desktop_packages" or "run_task_plugin")
+            lock (_sync) _lastPackagingFailure = null;
         try
         {
             var snapshot = await GenericSnapshotAsync(name, arguments, ct).ConfigureAwait(false);
@@ -1064,18 +1082,20 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
                         {
                             using var partDoc = JsonDocument.Parse(part.Arguments);
                             var targetName = partDoc.RootElement.GetProperty("architecture").GetString() ?? "";
+                            var captured = new PackagingOutputTail(progress);
                             try
                             {
                                 var request = LatestDesktopRequest(partDoc.RootElement);
                                 targetName = request.RuntimeIdentifier;
                                 _output($"开始打包 {targetName}：{request.CurrentVersion} → {request.NextVersion}");
-                                code = await RunApprovedPluginAsync(name, part.Arguments, part.Snapshot, request, progress, ct).ConfigureAwait(false);
+                                code = await RunApprovedPluginAsync(name, part.Arguments, part.Snapshot, request, captured, ct, captured.Errors).ConfigureAwait(false);
                                 ct.ThrowIfCancellationRequested();
                                 progress.ThrowIfFailed();
                                 if (code != 0)
                                 {
                                     _output($"{request.RuntimeIdentifier} 打包失败（退出代码 {code}），后续架构未执行。");
-                                    return $"Execution failed for {request.RuntimeIdentifier} (exit code {code}); completed: {string.Join(", ", completed)}; remaining architectures not run.";
+                                    var diagnosis = RecordPackagingFailure(request.RuntimeIdentifier, code, captured.GetText(), captured.Truncated);
+                                    return $"{diagnosis} Completed: {string.Join(", ", completed)}; remaining architectures not run.";
                                 }
                                 completed.Add(request.RuntimeIdentifier);
                                 _output($"{request.RuntimeIdentifier} 打包脚本执行成功。");
@@ -1084,14 +1104,20 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
                             catch (Exception ex)
                             {
                                 _output(RedactLocal($"{targetName} 打包失败：{ex.Message}；后续架构未执行。"));
-                                return $"Execution failed for {targetName}: {ContextSecrets.Scrub(ex.Message, _apiKey)}; completed: {string.Join(", ", completed)}; remaining architectures not run.";
+                                var diagnosis = RecordPackagingFailure(targetName, null, captured.GetText() + "\n" + ex.Message, captured.Truncated);
+                                return $"{diagnosis} Completed: {string.Join(", ", completed)}; remaining architectures not run.";
                             }
                         }
                         return $"Execution completed for {string.Join(", ", completed)}; inspect local logs/artifacts.";
                     }
                     var pluginRequest = new PluginRequest(Get("task"), Get("task") == "marketserver" ? _settings.Profile!.MarketServerRoot : _settings.Profile!.ScriptsDirectory,
                         Get("runtimeIdentifier"), Get("currentVersion"), Get("nextVersion"), ResolveAgentOssHost(Get("task"), Get("runtimeIdentifier"), Get("ossHost")), PackagingPathProvider.SourceDirectory);
-                    code = await RunApprovedPluginAsync(name, arguments, grant.Snapshot, pluginRequest, progress, ct).ConfigureAwait(false);
+                    var pluginOutput = new PackagingOutputTail(progress);
+                    code = await RunApprovedPluginAsync(name, arguments, grant.Snapshot, pluginRequest, pluginOutput, ct, pluginOutput.Errors).ConfigureAwait(false);
+                    ct.ThrowIfCancellationRequested();
+                    progress.ThrowIfFailed();
+                    if (code != 0)
+                        return RecordPackagingFailure(pluginRequest.RuntimeIdentifier, code, pluginOutput.GetText(), pluginOutput.Truncated);
                 }
                 finally { _scriptMutex.Release(); }
             }
@@ -1118,6 +1144,8 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
         catch (Exception ex)
         {
             _output(RedactLocal("任务失败：" + ex.Message));
+            if (name is "publish_latest_desktop_packages" or "run_task_plugin")
+                return "Execution failed. " + RecordPackagingFailure("approved task", null, ex.Message, false);
             return name switch
             {
                 "search_web" => "Search failed explicitly: " + ContextSecrets.Scrub(ex.Message, _apiKey),
@@ -1128,7 +1156,7 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
     }
 
     private async Task<int> RunApprovedPluginAsync(string name, string arguments, GenericSnapshot approved, PluginRequest request,
-        OutputProgress progress, CancellationToken ct)
+        IProgress<string> progress, CancellationToken ct, IProgress<string>? errors = null)
     {
         if (string.IsNullOrWhiteSpace(request.SourceDirectory) || !Directory.Exists(request.SourceDirectory))
             throw new InvalidOperationException("src 目录配置已失效，请重新配置后再批准打包任务。");
@@ -1150,14 +1178,43 @@ public sealed class HarnessWorkspace : IDisposable, IAsyncDisposable
             if (await GenericSnapshotAsync(name, arguments, ct).ConfigureAwait(false) != approved)
                 throw new InvalidOperationException("Plugin dependencies or version changed after approval.");
             var environment = new Dictionary<string, string?> { ["CLIENT_PUBLISH_SOURCE_DIRECTORY"] = request.SourceDirectory };
-            if (command.ScriptPath is not null)
-                environment["PATH"] = string.Join(Path.PathSeparator, request.SourceDirectory, Environment.GetEnvironmentVariable("PATH") ?? "");
             return await _taskRunner.RunProcessAsync(command.Executable, command.Arguments, command.Directory,
-                progress, ct, interactive: true, environment: environment).ConfigureAwait(false);
+                progress, ct, interactive: true, environment: environment, errorOutput: errors).ConfigureAwait(false);
         }
         finally { foreach (var file in locks) file.Dispose(); }
     }
 
+    private sealed class PackagingOutputTail(OutputProgress localOutput) : IProgress<string>
+    {
+        private const int Limit = 8192;
+        private readonly object _lock = new();
+        private readonly System.Text.StringBuilder _stdout = new();
+        private readonly System.Text.StringBuilder _stderr = new();
+        public bool Truncated { get; private set; }
+        public IProgress<string> Errors => new ErrorProgress(this);
+        public void Report(string value) => Capture(_stdout, value);
+        private void Capture(System.Text.StringBuilder buffer, string value)
+        {
+            localOutput.Report(value);
+            lock (_lock)
+            {
+                if (value.Length >= Limit)
+                {
+                    Truncated |= buffer.Length > 0 || value.Length > Limit;
+                    buffer.Clear().Append(value.AsSpan(value.Length - Limit));
+                    return;
+                }
+                var excess = buffer.Length + value.Length - Limit;
+                if (excess > 0) { buffer.Remove(0, excess); Truncated = true; }
+                buffer.Append(value);
+            }
+        }
+        public string GetText() { lock (_lock) return _stdout.ToString() + "\n" + _stderr; }
+        private sealed class ErrorProgress(PackagingOutputTail owner) : IProgress<string>
+        {
+            public void Report(string value) => owner.Capture(owner._stderr, value);
+        }
+    }
     private void SetState(HarnessState state) { lock (_sync) _state = state; }
     private void ThrowIfDisposed() { if (_disposed) throw new ObjectDisposedException(nameof(HarnessWorkspace)); }
     public void Dispose()

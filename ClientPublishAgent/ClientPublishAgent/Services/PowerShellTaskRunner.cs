@@ -95,14 +95,14 @@ public sealed class PowerShellTaskRunner
 
 	public async Task<int> RunProcessAsync(string executable, IEnumerable<string> arguments, string directory,
 		IProgress<string> output, CancellationToken cancellationToken, bool interactive = false,
-		IReadOnlyDictionary<string, string?>? environment = null)
+		IReadOnlyDictionary<string, string?>? environment = null, IProgress<string>? errorOutput = null)
 	{
 		var processArguments = arguments.ToArray();
 		if (interactive && (Path.GetFileNameWithoutExtension(executable).Equals("powershell", StringComparison.OrdinalIgnoreCase) ||
 			Path.GetFileNameWithoutExtension(executable).Equals("pwsh", StringComparison.OrdinalIgnoreCase)))
 			processArguments = PrepareInteractivePowerShellArguments(processArguments);
 		await ExecutionGate.WaitAsync(cancellationToken);
-		try { return await RunCoreAsync(executable, processArguments, directory, output, cancellationToken, interactive, environment); }
+		try { return await RunCoreAsync(executable, processArguments, directory, output, cancellationToken, interactive, environment, errorOutput); }
 		finally { ExecutionGate.Release(); }
 	}
 
@@ -142,7 +142,7 @@ public sealed class PowerShellTaskRunner
 
 	private async Task<int> RunCoreAsync(string executable, IEnumerable<string> arguments, string directory,
 		IProgress<string> output, CancellationToken cancellationToken, bool interactive,
-		IReadOnlyDictionary<string, string?>? environment)
+		IReadOnlyDictionary<string, string?>? environment, IProgress<string>? errorOutput)
 	{
 		cancellationToken.ThrowIfCancellationRequested();
 		var startInfo = new ProcessStartInfo
@@ -176,8 +176,8 @@ public sealed class PowerShellTaskRunner
 		var isPowerShell = Path.GetFileNameWithoutExtension(executable).Equals("powershell", StringComparison.OrdinalIgnoreCase) ||
 			Path.GetFileNameWithoutExtension(executable).Equals("pwsh", StringComparison.OrdinalIgnoreCase);
 		var stderr = interactive && isPowerShell
-			? ReadPowerShellErrorAsync(process.StandardError, output)
-			: ReadOutputAsync(process.StandardError, output);
+			? ReadPowerShellErrorAsync(process.StandardError, errorOutput ?? output)
+			: ReadOutputAsync(process.StandardError, errorOutput ?? output);
 		try
 		{
 			if (interactive)
